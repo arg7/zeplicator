@@ -79,6 +79,10 @@ zbud_die() {
     if [[ -n "$dataset" ]]; then
         send_smtp_alert "ERROR in ZFSBUD: $*"
     fi
+    echo "HINT: If replication failed due to divergent snapshots, try recovery options:"
+    echo "  --promote --auto [-y]         (Auto-discover latest common snapshot and rollback chain)"
+    echo "  --promote --snap <name> [-y]  (Rollback chain to specific snapshot)"
+    echo "  --promote --destroy-chain     (DANGER: Destroy downstream datasets and start over)"
     exit 1
 }
 
@@ -204,12 +208,14 @@ zfsbud_core() {
     local local_ds="${my_hostname}-pool/${ds_name}"
 
     if [ -z "$dry_run" ]; then
-      # FORCE CLEANUP of destination for initial send
-      zbud_msg "Cleaning up $remote_ds for initial send..."
-      if [ -n "$remote_shell" ]; then
-        $remote_shell "zfs destroy -r $remote_ds 2>/dev/null || true"
-      else
-        zfs destroy -r "$remote_ds" 2>/dev/null || true
+      # FORCE CLEANUP of destination ONLY if --destroy-chain is set
+      if [[ "$DESTROY_CHAIN" == true ]]; then
+        zbud_msg "DESTROY_CHAIN: Cleaning up $remote_ds for initial send..."
+        if [ -n "$remote_shell" ]; then
+          $remote_shell "zfs destroy -r $remote_ds 2>/dev/null || true"
+        else
+          zfs destroy -r "$remote_ds" 2>/dev/null || true
+        fi
       fi
 
       if [ -n "$remote_shell" ]; then
@@ -236,14 +242,6 @@ zfsbud_core() {
     local local_ds="${my_hostname}-pool/${ds_name}"
 
     if [ -z "$dry_run" ]; then
-      # FORCE CLEANUP of destination for initial send
-      zbud_msg "Cleaning up $remote_ds for initial send..."
-      if [ -n "$remote_shell" ]; then
-        $remote_shell "zfs destroy -r $remote_ds 2>/dev/null || true"
-      else
-        zfs destroy -r "$remote_ds" 2>/dev/null || true
-      fi
-
       if [ -n "$remote_shell" ]; then
         set -o pipefail
         zfs send -w -p $recursive_send $verbose -i "$local_ds@$last_snapshot_common" "$last_snapshot_source" | mbuffer -q -r "$RATE" -m "$BUF" | zstd | $remote_shell "zstd -d | zfs recv $resume -F -u $remote_ds"
@@ -320,6 +318,10 @@ die() {
     if [[ -n "$dataset" ]]; then
         send_smtp_alert "ERROR: $*"
     fi
+    echo "HINT: If replication failed due to divergent snapshots, try recovery options:"
+    echo "  --promote --auto [-y]         (Auto-discover latest common snapshot and rollback chain)"
+    echo "  --promote --snap <name> [-y]  (Rollback chain to specific snapshot)"
+    echo "  --promote --destroy-chain     (DANGER: Destroy downstream datasets and start over)"
     exit 1
 }
 
@@ -401,6 +403,10 @@ MARK_ONLY=false
 initial_send=false
 PROMOTE=false
 CASCADED=false
+AUTO=false
+DESTROY_CHAIN=false
+YES=false
+PROMOTE_SNAP=""
 sync_props_data=""
 
 # Parse additional flags
@@ -411,6 +417,10 @@ while [[ $# -gt 0 ]]; do
         --initial) initial_send=true; shift ;;
         --promote) PROMOTE=true; shift ;;
         --cascaded) CASCADED=true; shift ;;
+        --auto) AUTO=true; shift ;;
+        --destroy-chain) DESTROY_CHAIN=true; shift ;;
+        -y) YES=true; shift ;;
+        --snap) PROMOTE_SNAP="$2"; shift 2 ;;
         --sync-props) sync_props_data="$2"; shift 2 ;;
         *) shift ;;
     esac
@@ -419,26 +429,73 @@ done
 # Handle Promotion logic
 if [[ "$PROMOTE" == true ]]; then
     echo "Promoting $my_hostname to Master..."
-    # Get current chain from local or passed properties
+    
+    # 1. Update Chain Order
     CURRENT_CHAIN=$(get_zfs_prop "repl:chain" "$local_ds")
-    if [[ -n "$CURRENT_CHAIN" ]]; then
-        IFS=',' read -r -a nodes <<< "$CURRENT_CHAIN"
-        NEW_NODES=("$my_hostname")
-        for n in "${nodes[@]}"; do
-            if [[ "$n" != "$my_hostname" ]]; then
-                NEW_NODES+=("$n")
-            fi
-        done
-        NEW_CHAIN=$(IFS=','; echo "${NEW_NODES[*]}")
-        if [[ "$CURRENT_CHAIN" != "$NEW_CHAIN" ]]; then
-            echo "  Updating chain: $CURRENT_CHAIN -> $NEW_CHAIN"
-            zfs set repl:chain="$NEW_CHAIN" "$local_ds"
-            send_smtp_alert "NOTICE: Node $my_hostname has been PROMOTED to Master for dataset $raw_dataset. New chain: $NEW_CHAIN"
-        else
-            echo "  $my_hostname is already Master."
+    if [[ -z "$CURRENT_CHAIN" ]]; then die "ERR: Cannot promote, no existing repl:chain found on $local_ds"; fi
+
+    IFS=',' read -r -a nodes <<< "$CURRENT_CHAIN"
+    NEW_NODES=("$my_hostname")
+    for n in "${nodes[@]}"; do
+        if [[ "$n" != "$my_hostname" ]]; then
+            NEW_NODES+=("$n")
         fi
+    done
+    NEW_CHAIN=$(IFS=','; echo "${NEW_NODES[*]}")
+    
+    if [[ "$CURRENT_CHAIN" != "$NEW_CHAIN" ]]; then
+        echo "  Updating chain: $CURRENT_CHAIN -> $NEW_CHAIN"
+        zfs set repl:chain="$NEW_CHAIN" "$local_ds"
+        send_smtp_alert "NOTICE: Node $my_hostname has been PROMOTED to Master for dataset $raw_dataset. New chain: $NEW_CHAIN"
     else
-        die "ERR: Cannot promote, no existing repl:chain found on $local_ds"
+        echo "  $my_hostname is already Master in local config."
+    fi
+
+    # 2. Recovery / Consistency Check
+    if [[ "$AUTO" == true || -n "$PROMOTE_SNAP" ]]; then
+        TARGET_SNAP=""
+        if [[ -n "$PROMOTE_SNAP" ]]; then
+            TARGET_SNAP="$PROMOTE_SNAP"
+            echo "Checking if snapshot $TARGET_SNAP exists on all nodes..."
+        else
+            echo "Auto-discovering latest common snapshot across the chain..."
+            # Gather snapshots from all nodes
+            declare -A snap_counts
+            total_nodes=${#NEW_NODES[@]}
+            for n in "${NEW_NODES[@]}"; do
+                echo "  Querying $n..."
+                node_snaps=$(ssh "$n" "zfs list -t snap -H -o name -r ${n}-pool/${ds_name}" | cut -d'@' -f2)
+                for s in $node_snaps; do
+                    ((snap_counts["$s"]++))
+                done
+            done
+            # Find latest (highest count and newest by name)
+            for s in $(echo "${!snap_counts[@]}" | tr ' ' '\n' | sort -r); do
+                if [[ ${snap_counts[$s]} -eq $total_nodes ]]; then
+                    TARGET_SNAP="$s"
+                    echo "Found latest common snapshot: $TARGET_SNAP"
+                    break
+                fi
+            done
+        fi
+
+        if [[ -z "$TARGET_SNAP" ]]; then
+            die "ERR: Could not find a common snapshot across all nodes. Use --destroy-chain if you want to start fresh."
+        fi
+
+        # 3. Confirmation
+        if [[ "$YES" != true ]]; then
+            echo -n "Are you sure you want to rollback ALL nodes in the chain to @$TARGET_SNAP? (y/N): "
+            read -r resp
+            if [[ "$resp" != "y" ]]; then die "Aborted by user."; fi
+        fi
+
+        # 4. Execute Rollbacks
+        for n in "${NEW_NODES[@]}"; do
+            echo "Rolling back $n to $TARGET_SNAP..."
+            ssh "$n" "zfs rollback -r ${n}-pool/${ds_name}@$TARGET_SNAP" || die "ERR: Rollback failed on $n"
+        done
+        echo "Chain successfully consistent at @$TARGET_SNAP"
     fi
 fi
 
