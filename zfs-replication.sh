@@ -229,9 +229,9 @@ zfsbud_core() {
       fi
 
       if [ -n "$remote_shell" ]; then
-        ! zfs send -w -R $verbose "$latest_snapshot_source" 2>>/tmp/zfs-replication.err | mbuffer -q -r "$RATE" -m "$BUF" 2>>/tmp/zfs-replication.err | zstd 2>>/tmp/zfs-replication.err | $remote_shell "zstd -d 2>>/tmp/zfs-replication.err | zfs recv $resume -F -u $remote_ds 2>>/tmp/zfs-replication.err" 2>>/tmp/zfs-replication.err && return 1
+        ! zfs send -w -R "$latest_snapshot_source" 2>>/tmp/zfs-replication.err | mbuffer -q -r "$RATE" -m "$BUF" 2>>/tmp/zfs-replication.err | zstd 2>>/tmp/zfs-replication.err | $remote_shell "zstd -d | zfs recv $resume -F -u $remote_ds" 2>>/tmp/zfs-replication.err && return 1
       else
-        ! zfs send -w -R $verbose "$latest_snapshot_source" 2>>/tmp/zfs-replication.err | zfs recv $resume -F -u "$remote_ds" 2>>/tmp/zfs-replication.err && return 1
+        ! zfs send -w -R "$latest_snapshot_source" 2>>/tmp/zfs-replication.err | zfs recv $resume -F -u "$remote_ds" 2>>/tmp/zfs-replication.err && return 1
       fi
     fi
     last_snapshot_common="${latest_snapshot_source#*@}"
@@ -254,7 +254,8 @@ zfsbud_core() {
     if [ -z "$dry_run" ]; then
       if [ -n "$remote_shell" ]; then
         set -o pipefail
-        zfs send -w -p $recursive_send $verbose -i "$local_ds@$last_snapshot_common" "$last_snapshot_source" 2>>/tmp/zfs-replication.err | mbuffer -q -r "$RATE" -m "$BUF" 2>>/tmp/zfs-replication.err | zstd 2>>/tmp/zfs-replication.err | $remote_shell "zstd -d 2>>/tmp/zfs-replication.err | zfs recv $resume -F -u $remote_ds 2>>/tmp/zfs-replication.err" 2>>/tmp/zfs-replication.err
+        # We use a subshell on the remote to capture its stderr and print it to stdout so we can catch it locally
+        zfs send -w -p $recursive_send -i "$local_ds@$last_snapshot_common" "$last_snapshot_source" 2>>/tmp/zfs-replication.err | mbuffer -q -r "$RATE" -m "$BUF" 2>>/tmp/zfs-replication.err | zstd 2>>/tmp/zfs-replication.err | $remote_shell "zstd -d | zfs recv $resume -F -u $remote_ds" 2>>/tmp/zfs-replication.err
         local status=$?
         set +o pipefail
         if [[ $status -ne 0 ]]; then
@@ -262,7 +263,7 @@ zfsbud_core() {
            return 1
         fi
       else
-        ! zfs send -w -p $recursive_send $verbose -i "$local_ds@$last_snapshot_common" "$last_snapshot_source" 2>>/tmp/zfs-replication.err | zfs recv $resume -F -u "$remote_ds" 2>>/tmp/zfs-replication.err && return 1
+        ! zfs send -w -p $recursive_send -i "$local_ds@$last_snapshot_common" "$last_snapshot_source" 2>>/tmp/zfs-replication.err | zfs recv $resume -F -u "$remote_ds" 2>>/tmp/zfs-replication.err && return 1
       fi
     fi
   }
@@ -313,10 +314,7 @@ zfsbud_core() {
          zfs rollback -r "$remote_ds@$last_snapshot_common"
        fi
     fi
-    if ! send_incremental; then
-       zbud_msg "Incremental send failed. Attempting full resync as fallback..."
-       send_initial || zbud_die "Resync failed"
-    fi
+    send_incremental || zbud_die "Incremental send failed"
   done
 }
 
