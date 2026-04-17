@@ -1,8 +1,193 @@
 #!/bin/bash
 
+# ZFS Replication Manager
+# Incorporates zfsbud.sh logic for robust ZFS sending/receiving.
+# Credit for zfsbud.sh goes to Pawel Ginalski (https://gbyte.dev / gbytedev)
+
 dir=$(dirname "$0")
 
-# Helper functions
+# --- START OF ZFSBUD CORE (Adapted from zfsbud.sh) ---
+
+zbud_PATH=/usr/bin:/sbin:/bin
+zbud_timestamp_format="%Y-%m-%d-%H%M%S"
+
+zbud_msg() { echo "$*" 1>&2; }
+zbud_warn() { zbud_msg "WARNING: $*"; }
+zbud_die() { zbud_msg "ERROR: $*"; exit 1; }
+
+zbud_config_read_file() {
+  (grep -E "^${2}=" -m 1 "${1}" 2>/dev/null || echo "VAR=__UNDEFINED__") | head -n 1 | cut -d '=' -f 2-;
+}
+
+zbud_config_get() {
+  local working_dir="$(dirname "$(readlink -f "$0")")"
+  local val="$(zbud_config_read_file $working_dir/zfsbud.conf "${1}")";
+  if [ "${val}" = "__UNDEFINED__" ]; then
+    val="$(zbud_config_read_file $working_dir/default.zfsbud.conf "${1}")";
+    if [ "${val}" = "__UNDEFINED__" ]; then
+      # Fallback defaults if config files are missing
+      case "$1" in
+        default_snapshot_prefix) echo "zfsbud_" ;;
+        src_minutes|src_hourly|src_daily|src_weekly|src_monthly|src_yearly) echo "0" ;;
+        dst_minutes|dst_hourly|dst_daily|dst_weekly|dst_monthly|dst_yearly) echo "0" ;;
+        *) zbud_die "Default configuration for '${1}' is missing." ;;
+      esac
+      return
+    fi
+  fi
+  printf -- "%s" "${val}";
+}
+
+zfsbud_core() {
+  local PATH=$zbud_PATH
+  local timestamp=$(date "+$zbud_timestamp_format")
+  local log_file="$HOME/zfsbud_internal.log"
+  local RATE=20M
+  local BUF=64M
+  local resume="-s"
+  local snapshot_prefix=$(zbud_config_get default_snapshot_prefix)
+  
+  local create remove_old send initial recursive_send recursive_create recursive_destroy remote_shell verbose log dry_run snapshot_label destination_parent_dataset
+  declare -A src_keep_timestamps=() src_kept_timestamps=() dst_keep_timestamps=() dst_kept_timestamps=()
+  local source_snapshots=() destination_snapshots=() last_snapshot_common resume_token
+
+  # Parse args for this internal call
+  local OPTIND
+  while getopts "cs:in e:Rrp:vldL:h" opt; do
+    case $opt in
+      c) create=1 ;;
+      s) send=1; destination_parent_dataset=$OPTARG ;;
+      i) initial=1 ;;
+      n) unset zbud_resume ;;
+      e) remote_shell=$OPTARG ;;
+      R) recursive_send="-R"; recursive_create="-r"; recursive_destroy="-r" ;;
+      r) remove_old=1 ;;
+      p) snapshot_prefix=$OPTARG ;;
+      v) verbose="-v" ;;
+      l) log=1 ;;
+      d) dry_run=1 ;;
+      *) return 1 ;;
+    esac
+  done
+  shift $((OPTIND-1))
+  local datasets=("$@")
+
+  # Helper inner functions
+  dataset_exists() {
+    if [ -n "$remote_shell" ]; then
+      $remote_shell "zfs list -H -o name" | grep -qx "$1" && return 0
+    else
+      zfs list -H -o name | grep -qx "$1" && return 0
+    fi
+    return 1
+  }
+
+  set_resume_token() {
+    ! dataset_exists "$1" && return 0
+    local token="-"
+    if [ -n "$remote_shell" ]; then
+      token=$($remote_shell "zfs get -H -o value receive_resume_token $1")
+    else
+      token=$(zfs get -H -o value receive_resume_token "$1")
+    fi
+    [[ $token ]] && [[ $token != "-" ]] && resume_token=$token
+  }
+
+  get_local_snapshots() { zfs list -H -o name -t snapshot | grep "$1@"; }
+  get_remote_snapshots() { $remote_shell "zfs list -H -o name -t snapshot | grep $1@"; }
+  
+  set_source_snapshots() {
+    mapfile -t source_snapshots < <(get_local_snapshots "$1")
+  }
+  
+  set_destination_snapshots() {
+    if [ -n "$remote_shell" ]; then
+      mapfile -t destination_snapshots < <(get_remote_snapshots "$destination_parent_dataset/$1")
+    else
+      mapfile -t destination_snapshots < <(get_local_snapshots "$destination_parent_dataset/$1")
+    fi
+  }
+
+  set_common_snapshot() {
+    for destination_snapshot in "${destination_snapshots[@]}"; do
+      for source_snapshot in "${source_snapshots[@]}"; do
+        [[ "${source_snapshot#*@}" == "${destination_snapshot#*@}" ]] && last_snapshot_common=${source_snapshot#*@}
+      done
+    done
+    [ -n "$last_snapshot_common" ] && return 0 || return 1
+  }
+
+  send_initial() {
+    local first_snapshot_source=${source_snapshots[0]}
+    zbud_msg "Initial source snapshot: $first_snapshot_source"
+    zbud_msg "Sending initial snapshot to destination..."
+    if [ -z "$dry_run" ]; then
+      if [ -n "$remote_shell" ]; then
+        ! zfs send -w $recursive_send $verbose "$first_snapshot_source" | mbuffer -q -r "$RATE" -m "$BUF" | zstd | $remote_shell "zstd -d | zfs recv $resume -F -u $destination_parent_dataset/$dataset_name" && return 1
+      else
+        ! zfs send -w $recursive_send $verbose "$first_snapshot_source" | zfs recv $resume -F -u "$destination_parent_dataset/$dataset_name" && return 1
+      fi
+    fi
+    last_snapshot_common="${first_snapshot_source#*@}"
+  }
+
+  send_incremental() {
+    local last_snapshot_source=${source_snapshots[-1]}
+    if [[ ${last_snapshot_source#*@} == "$last_snapshot_common" ]]; then
+      zbud_msg "Skipping incremental: already up to date."
+      return 0
+    fi
+    zbud_msg "Sending incremental: $last_snapshot_common -> ${last_snapshot_source#*@}"
+    if [ -z "$dry_run" ]; then
+      if [ -n "$remote_shell" ]; then
+        ! zfs send -w $recursive_send $verbose -I "$dataset@$last_snapshot_common" "$last_snapshot_source" | mbuffer -q -r "$RATE" -m "$BUF" | zstd | $remote_shell "zstd -d | zfs recv $resume -F -d -u $destination_parent_dataset" && return 1
+      else
+        ! zfs send -w $recursive_send $verbose -I "$dataset@$last_snapshot_common" "$last_snapshot_source" | zfs recv $resume -F -d -u "$destination_parent_dataset" && return 1
+      fi
+    fi
+  }
+
+  # Simplified processing for zfs-replication.sh context
+  for dataset in "${datasets[@]}"; do
+    local dataset_name=${dataset##*/}
+    zbud_msg "Processing $dataset -> $destination_parent_dataset/$dataset_name"
+    
+    set_source_snapshots "$dataset"
+    if ((${#source_snapshots[@]} < 1)); then
+       zbud_warn "No snapshots for $dataset"
+       continue
+    fi
+
+    set_resume_token "$destination_parent_dataset/$dataset_name"
+    
+    if [ -n "$resume_token" ]; then
+       # Resume logic simplified
+       if [ -z "$dry_run" ]; then
+         local pool=${destination_parent_dataset%%/*}
+         if [ -n "$remote_shell" ]; then
+           zfs send -w $verbose -t "$resume_token" | mbuffer -q -r "$RATE" -m "$BUF" | zstd | $remote_shell "zstd -d | zfs recv $resume -F -d -u $pool"
+         else
+           zfs send -w $verbose -t "$resume_token" | zfs recv $resume -F -d -u "$pool"
+         fi
+       fi
+    fi
+
+    set_destination_snapshots "$dataset_name"
+    if ! set_common_snapshot; then
+       if [ -n "$initial" ]; then
+          send_initial || zbud_die "Initial send failed"
+       else
+          zbud_warn "No common snapshots. Use -i for initial."
+          continue
+       fi
+    fi
+    send_incremental || zbud_die "Incremental send failed"
+  done
+}
+
+# --- END OF ZFSBUD CORE ---
+
+# Helper functions for main script
 die() {
     echo "$@"
     exit 1
@@ -179,7 +364,8 @@ LATEST_SNAP=$(zfs list -t snap -o name -H -S creation -r "$dataset" | grep "@.*$
 # 2. Replication & Audit
 if [[ -n "$NEXT_HOP" ]]; then
     echo "Replicating $dataset to $NEXT_HOP..."
-    "$dir/zfsbud.sh" -s "$dataset" -e "ssh $NEXT_HOP" -v "$dataset"
+    # Call internal zfsbud logic instead of external script
+    zfsbud_core -s "$dataset" -e "ssh $NEXT_HOP" -v "$dataset"
     
     if [[ $? -ne 0 ]]; then
         echo 9999 > /var/run/keep-$label.txt
@@ -189,7 +375,7 @@ if [[ -n "$NEXT_HOP" ]]; then
         
         # PROPAGATE & VERIFY
         echo "Cascading: triggering downstream chain for $dataset on $NEXT_HOP"
-        DOWNSTREAM_OUT=$(ssh "$NEXT_HOP" "$dir/zfs-manager.sh $dataset $label $keep_fallback" 2>&1)
+        DOWNSTREAM_OUT=$(ssh "$NEXT_HOP" "$dir/zfs-replication.sh $dataset $label $keep_fallback" 2>&1)
         SSH_STATUS=$?
         
         # Bubble up logs
