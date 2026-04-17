@@ -364,6 +364,7 @@ dataset=$local_ds # Ensure helper functions use the local path
 
 MARK_ONLY=false
 initial_send=false
+ROTATE=false
 sync_props_data=""
 
 # Parse additional flags
@@ -372,13 +373,39 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --mark-only) MARK_ONLY=true; shift ;;
         --initial) initial_send=true; shift ;;
+        --rotate) ROTATE=true; shift ;;
         --sync-props) sync_props_data="$2"; shift 2 ;;
         *) shift ;;
     esac
 done
 
-# Apply propagated properties if provided
-if [[ -n "$sync_props_data" ]]; then
+# Handle Rotation logic
+if [[ "$ROTATE" == true ]]; then
+    echo "Rotating roles: Promoting $my_hostname to Master..."
+    # Get current chain from local or passed properties
+    CURRENT_CHAIN=$(get_zfs_prop "repl:chain" "$local_ds")
+    if [[ -n "$CURRENT_CHAIN" ]]; then
+        IFS=',' read -r -a nodes <<< "$CURRENT_CHAIN"
+        NEW_NODES=("$my_hostname")
+        for n in "${nodes[@]}"; do
+            if [[ "$n" != "$my_hostname" ]]; then
+                NEW_NODES+=("$n")
+            fi
+        done
+        NEW_CHAIN=$(IFS=','; echo "${NEW_NODES[*]}")
+        if [[ "$CURRENT_CHAIN" != "$NEW_CHAIN" ]]; then
+            echo "  Updating chain: $CURRENT_CHAIN -> $NEW_CHAIN"
+            zfs set repl:chain="$NEW_CHAIN" "$local_ds"
+        else
+            echo "  $my_hostname is already Master."
+        fi
+    else
+        die "ERR: Cannot rotate, no existing repl:chain found on $local_ds"
+    fi
+fi
+
+# Apply propagated properties if provided (if not rotating)
+if [[ -n "$sync_props_data" && "$ROTATE" != true ]]; then
     # Check if dataset exists before applying (it might not on first --initial run)
     if zfs list "$local_ds" >/dev/null 2>&1; then
         apply_repl_props "$local_ds" "$sync_props_data"
