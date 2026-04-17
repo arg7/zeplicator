@@ -149,24 +149,31 @@ zfsbud_core() {
     local ds_name="${dataset#*/}"
     local remote_ds="${destination_parent_dataset}/${ds_name}"
     
-    # Identify LOCAL dataset to send from (e.g. node2-pool/data)
+    # Identify LOCAL dataset to send from
     local my_hostname=$(hostname)
     local local_ds="${my_hostname}-pool/${ds_name}"
 
     if [ -z "$dry_run" ]; then
       if [ -n "$remote_shell" ]; then
-        ! zfs send -w $recursive_send $verbose -i "$local_ds@$last_snapshot_common" "$last_snapshot_source" | mbuffer -q -r "$RATE" -m "$BUF" | zstd | $remote_shell "zstd -d | zfs recv $resume -F -u $remote_ds" && return 1
+        set -o pipefail
+        zfs send -w -p $recursive_send $verbose -i "$local_ds@$last_snapshot_common" "$last_snapshot_source" | mbuffer -q -r "$RATE" -m "$BUF" | zstd | $remote_shell "zstd -d | zfs recv $resume -F -u $remote_ds"
+        local status=$?
+        set +o pipefail
+        if [[ $status -ne 0 ]]; then
+           zbud_msg "Pipeline failed with status $status"
+           return 1
+        fi
       else
-        ! zfs send -w $recursive_send $verbose -i "$local_ds@$last_snapshot_common" "$last_snapshot_source" | zfs recv $resume -F -u "$remote_ds" && return 1
+        ! zfs send -w -p $recursive_send $verbose -i "$local_ds@$last_snapshot_common" "$last_snapshot_source" | zfs recv $resume -F -u "$remote_ds" && return 1
       fi
     fi
   }
 
   # Simplified processing for zfs-replication.sh context
   for dataset in "${datasets[@]}"; do
-    local ds_name="${dataset#*/}"
-    local my_hostname=$(hostname)
-    local local_ds="${my_hostname}-pool/${ds_name}"
+    ds_name="${dataset#*/}"
+    my_hostname=$(hostname)
+    local_ds="${my_hostname}-pool/${ds_name}"
     
     zbud_msg "Processing $local_ds -> ${destination_parent_dataset} (Target: ${destination_parent_dataset}/${ds_name})"
     
@@ -371,8 +378,12 @@ if [[ "$IS_MASTER" == true ]]; then
     k_flag=$(cat /var/run/keep-$label.txt 2> /dev/null)
     [[ -z "$k_flag" ]] && k_flag=999
     
-    echo "Creating snapshot for $dataset (label: $label)..."
-    /usr/sbin/zfs-auto-snapshot --syslog --label=$label --keep=$k_flag "$dataset"
+    ds_name="${dataset#*/}"
+    my_hostname=$(hostname)
+    local_ds="${my_hostname}-pool/${ds_name}"
+
+    echo "Creating snapshot for $local_ds (label: $label)..."
+    /usr/sbin/zfs-auto-snapshot --syslog --label=$label --keep=$k_flag "$local_ds"
     [[ $? -eq 0 ]] || die "ERR: snapshot creation failed"
 else
     echo "INFO: Not a master host ($ME), skipping snapshot creation."
@@ -416,12 +427,16 @@ if [[ -n "$NEXT_HOP" ]]; then
                 echo "VERIFICATION SUCCESS: Snapshot $LATEST_SNAP confirmed at the end of the chain."
                 
                 # HOUSEKEEPING
-                echo "Marking local snapshots as shipped..."
-                zfs list -t snap -o name -H -r "$dataset" | grep "@.*$label" | \
+                ds_name="${dataset#*/}"
+                my_hostname=$(hostname)
+                local_ds="${my_hostname}-pool/${ds_name}"
+
+                echo "Marking local snapshots ($local_ds) as shipped..."
+                zfs list -t snap -o name -H -r "$local_ds" | grep "@.*$label" | \
                 while read s; do
                     zfs set zfs-send:shipped=true "$s"
                 done
-                purge_shipped_snapshots "$dataset" "$label" "$RESOLVED_KEEP"
+                purge_shipped_snapshots "$local_ds" "$label" "$RESOLVED_KEEP"
                 
                 echo "SENT_LIST:$ARRIVED_LIST"
             else
@@ -434,8 +449,12 @@ if [[ -n "$NEXT_HOP" ]]; then
     fi
 else
     echo "INFO: End of chain ($ME). Reporting state."
-    /usr/sbin/zfs-auto-snapshot --syslog --label=$label --keep=$RESOLVED_KEEP "$dataset"
-    SINK_LIST=$(zfs list -t snap -o name -H -S creation -r "$dataset" | grep "@.*$label" | cut -d'@' -f2 | xargs | tr ' ' ',')
+    ds_name="${dataset#*/}"
+    my_hostname=$(hostname)
+    local_ds="${my_hostname}-pool/${ds_name}"
+
+    /usr/sbin/zfs-auto-snapshot --syslog --label=$label --keep=$RESOLVED_KEEP "$local_ds"
+    SINK_LIST=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*$label" | cut -d'@' -f2 | xargs | tr ' ' ',')
     echo "SENT_LIST:$SINK_LIST"
 fi
 
