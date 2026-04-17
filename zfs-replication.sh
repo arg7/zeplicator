@@ -25,6 +25,13 @@ send_smtp_alert() {
     
     [[ -z "$host" || -z "$to" ]] && return
 
+    # Include captured error details if they exist
+    local detail=""
+    if [[ -f "/tmp/zfs-replication.err" ]]; then
+        detail=$(cat /tmp/zfs-replication.err)
+        rm -f /tmp/zfs-replication.err
+    fi
+
     echo "Sending alert email to $to..."
     curl -s --url "${proto:-smtps}://${host}:${port:-465}" \
          --user "${user}:${pass}" \
@@ -37,6 +44,9 @@ Subject: ZFS Replication Alert: $dataset on $(hostname)
 Date: $(date -R)
 
 $msg
+
+--- Error Details ---
+${detail:-No specific error details captured.}
 EOF
 }
 
@@ -219,9 +229,9 @@ zfsbud_core() {
       fi
 
       if [ -n "$remote_shell" ]; then
-        ! zfs send -w -R $verbose "$latest_snapshot_source" | mbuffer -q -r "$RATE" -m "$BUF" | zstd | $remote_shell "zstd -d | zfs recv $resume -F -u $remote_ds" && return 1
+        ! zfs send -w -R $verbose "$latest_snapshot_source" 2>>/tmp/zfs-replication.err | mbuffer -q -r "$RATE" -m "$BUF" 2>>/tmp/zfs-replication.err | zstd 2>>/tmp/zfs-replication.err | $remote_shell "zstd -d 2>>/tmp/zfs-replication.err | zfs recv $resume -F -u $remote_ds 2>>/tmp/zfs-replication.err" 2>>/tmp/zfs-replication.err && return 1
       else
-        ! zfs send -w -R $verbose "$latest_snapshot_source" | zfs recv $resume -F -u "$remote_ds" && return 1
+        ! zfs send -w -R $verbose "$latest_snapshot_source" 2>>/tmp/zfs-replication.err | zfs recv $resume -F -u "$remote_ds" 2>>/tmp/zfs-replication.err && return 1
       fi
     fi
     last_snapshot_common="${latest_snapshot_source#*@}"
@@ -244,7 +254,7 @@ zfsbud_core() {
     if [ -z "$dry_run" ]; then
       if [ -n "$remote_shell" ]; then
         set -o pipefail
-        zfs send -w -p $recursive_send $verbose -i "$local_ds@$last_snapshot_common" "$last_snapshot_source" | mbuffer -q -r "$RATE" -m "$BUF" | zstd | $remote_shell "zstd -d | zfs recv $resume -F -u $remote_ds"
+        zfs send -w -p $recursive_send $verbose -i "$local_ds@$last_snapshot_common" "$last_snapshot_source" 2>>/tmp/zfs-replication.err | mbuffer -q -r "$RATE" -m "$BUF" 2>>/tmp/zfs-replication.err | zstd 2>>/tmp/zfs-replication.err | $remote_shell "zstd -d 2>>/tmp/zfs-replication.err | zfs recv $resume -F -u $remote_ds 2>>/tmp/zfs-replication.err" 2>>/tmp/zfs-replication.err
         local status=$?
         set +o pipefail
         if [[ $status -ne 0 ]]; then
@@ -252,7 +262,7 @@ zfsbud_core() {
            return 1
         fi
       else
-        ! zfs send -w -p $recursive_send $verbose -i "$local_ds@$last_snapshot_common" "$last_snapshot_source" | zfs recv $resume -F -u "$remote_ds" && return 1
+        ! zfs send -w -p $recursive_send $verbose -i "$local_ds@$last_snapshot_common" "$last_snapshot_source" 2>>/tmp/zfs-replication.err | zfs recv $resume -F -u "$remote_ds" 2>>/tmp/zfs-replication.err && return 1
       fi
     fi
   }
