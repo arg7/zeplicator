@@ -176,9 +176,16 @@ zfsbud_core() {
   }
 
   set_common_snapshot() {
-    for destination_snapshot in "${destination_snapshots[@]}"; do
-      for source_snapshot in "${source_snapshots[@]}"; do
-        [[ "${source_snapshot#*@}" == "${destination_snapshot#*@}" ]] && last_snapshot_common=${source_snapshot#*@}
+    last_snapshot_common=""
+    # Iterate through destination snapshots in reverse (newest first)
+    for (( i=${#destination_snapshots[@]}-1; i>=0; i-- )); do
+      dest_snap="${destination_snapshots[$i]}"
+      dest_label="${dest_snap#*@}"
+      for source_snap in "${source_snapshots[@]}"; do
+        if [[ "${source_snap#*@}" == "$dest_label" ]]; then
+           last_snapshot_common="$dest_label"
+           return 0
+        fi
       done
     done
     [ -n "$last_snapshot_common" ] && return 0 || return 1
@@ -197,6 +204,14 @@ zfsbud_core() {
     local local_ds="${my_hostname}-pool/${ds_name}"
 
     if [ -z "$dry_run" ]; then
+      # FORCE CLEANUP of destination for initial send
+      zbud_msg "Cleaning up $remote_ds for initial send..."
+      if [ -n "$remote_shell" ]; then
+        $remote_shell "zfs destroy -r $remote_ds 2>/dev/null || true"
+      else
+        zfs destroy -r "$remote_ds" 2>/dev/null || true
+      fi
+
       if [ -n "$remote_shell" ]; then
         ! zfs send -w -R $verbose "$latest_snapshot_source" | mbuffer -q -r "$RATE" -m "$BUF" | zstd | $remote_shell "zstd -d | zfs recv $resume -F -u $remote_ds" && return 1
       else
@@ -221,6 +236,14 @@ zfsbud_core() {
     local local_ds="${my_hostname}-pool/${ds_name}"
 
     if [ -z "$dry_run" ]; then
+      # FORCE CLEANUP of destination for initial send
+      zbud_msg "Cleaning up $remote_ds for initial send..."
+      if [ -n "$remote_shell" ]; then
+        $remote_shell "zfs destroy -r $remote_ds 2>/dev/null || true"
+      else
+        zfs destroy -r "$remote_ds" 2>/dev/null || true
+      fi
+
       if [ -n "$remote_shell" ]; then
         set -o pipefail
         zfs send -w -p $recursive_send $verbose -i "$local_ds@$last_snapshot_common" "$last_snapshot_source" | mbuffer -q -r "$RATE" -m "$BUF" | zstd | $remote_shell "zstd -d | zfs recv $resume -F -u $remote_ds"
@@ -272,8 +295,20 @@ zfsbud_core() {
           zbud_warn "No common snapshots for $local_ds. Use -i for initial."
           continue
        fi
+    else
+       # RESOLVE DIVERGENCE: Rollback receiver to the common snapshot
+       local remote_ds="${destination_parent_dataset}/${ds_name}"
+       zbud_msg "Rolling back $remote_ds to $last_snapshot_common to resolve divergence..."
+       if [ -n "$remote_shell" ]; then
+         $remote_shell "zfs rollback -r $remote_ds@$last_snapshot_common"
+       else
+         zfs rollback -r "$remote_ds@$last_snapshot_common"
+       fi
     fi
-    send_incremental || zbud_die "Incremental send failed"
+    if ! send_incremental; then
+       zbud_msg "Incremental send failed. Attempting full resync as fallback..."
+       send_initial || zbud_die "Resync failed"
+    fi
   done
 }
 
