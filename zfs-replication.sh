@@ -436,6 +436,7 @@ if [[ -n "$NEXT_HOP" ]]; then
                 while read s; do
                     zfs set zfs-send:shipped=true "$s"
                 done
+
                 purge_shipped_snapshots "$local_ds" "$label" "$RESOLVED_KEEP"
                 
                 echo "SENT_LIST:$ARRIVED_LIST"
@@ -454,6 +455,15 @@ else
     local_ds="${my_hostname}-pool/${ds_name}"
 
     /usr/sbin/zfs-auto-snapshot --syslog --label=$label --keep=$RESOLVED_KEEP "$local_ds"
+    
+    # SINK HOUSEKEEPING: Mark as shipped since we are the end of the line
+    echo "Sink node marking snapshots ($local_ds) as shipped..."
+    zfs list -t snap -o name -H -r "$local_ds" | grep "@.*$label" | \
+    while read s; do
+        zfs set zfs-send:shipped=true "$s"
+    done
+    purge_shipped_snapshots "$local_ds" "$label" "$RESOLVED_KEEP"
+
     SINK_LIST=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*$label" | cut -d'@' -f2 | xargs | tr ' ' ',')
     echo "SENT_LIST:$SINK_LIST"
 fi
