@@ -40,6 +40,33 @@ $msg
 EOF
 }
 
+get_repl_props_encoded() {
+    local ds=$1
+    # Get all repl: properties, format as key=value, semicolon separated, then base64
+    local props=$(zfs get all -H -o property,value "$ds" | grep "^repl:" | awk '{print $1"="$2}' | tr '\n' ';')
+    echo -n "$props" | base64 -w 0
+}
+
+apply_repl_props() {
+    local ds=$1
+    local encoded=$2
+    [[ -z "$encoded" ]] && return
+    
+    echo "Syncing replication properties for $ds..."
+    local decoded=$(echo -n "$encoded" | base64 -d)
+    IFS=';' read -ra props <<< "$decoded"
+    for p in "${props[@]}"; do
+        if [[ -n "$p" ]]; then
+            local current_val=$(zfs get -H -o value "${p%%=*}" "$ds" 2>/dev/null)
+            local new_val="${p#*=}"
+            if [[ "$current_val" != "$new_val" ]]; then
+                echo "  Updating ${p%%=*} -> $new_val"
+                zfs set "$p" "$ds" || echo "  Warning: Failed to set $p"
+            fi
+        fi
+    done
+}
+
 # --- START OF ZFSBUD CORE (Adapted from zfsbud.sh) ---
 
 zbud_PATH=/usr/bin:/sbin:/bin
@@ -325,23 +352,49 @@ check_stuck_job() {
 }
 
 # Params
-dataset=$1
+raw_dataset=$1
 label=${2:-"frequently"}
 keep_fallback=${3:-"10"}
+
+# Early local dataset resolution
+ds_name="${raw_dataset#*/}"
+my_hostname=$(hostname)
+local_ds="${my_hostname}-pool/${ds_name}"
+dataset=$local_ds # Ensure helper functions use the local path
+
 MARK_ONLY=false
 initial_send=false
-if [[ "$4" == "--mark-only" ]]; then MARK_ONLY=true; fi
-if [[ "$4" == "--initial" || "$5" == "--initial" ]]; then initial_send=true; fi
+sync_props_data=""
+
+# Parse additional flags
+shift 3
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --mark-only) MARK_ONLY=true; shift ;;
+        --initial) initial_send=true; shift ;;
+        --sync-props) sync_props_data="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+
+# Apply propagated properties if provided
+if [[ -n "$sync_props_data" ]]; then
+    # Check if dataset exists before applying (it might not on first --initial run)
+    if zfs list "$local_ds" >/dev/null 2>&1; then
+        apply_repl_props "$local_ds" "$sync_props_data"
+    else
+        echo "INFO: Dataset $local_ds not found, skipping property sync (likely initial run)."
+    fi
+fi
 
 # Identity & Configuration Discovery
-REPL_CHAIN=$(get_zfs_prop "repl:chain" "$dataset")
-REPL_USER=$(get_zfs_prop "repl:user" "$dataset")
+REPL_CHAIN=$(get_zfs_prop "repl:chain" "$local_ds")
+REPL_USER=$(get_zfs_prop "repl:user" "$local_ds")
 [[ -z "$REPL_USER" ]] && REPL_USER="root"
 
-echo "Start: $(date); Dataset: $dataset; Label: $label"
+echo "Start: $(date); Dataset: $local_ds; Label: $label"
 
-[[ -n "$dataset" ]] || die "dataset not specified"
-
+[[ -n "$raw_dataset" ]] || die "dataset not specified"
 ME=$(hostname)
 NEXT_HOP=""
 IS_MASTER=false
@@ -360,10 +413,10 @@ if [[ -n "$REPL_CHAIN" ]]; then
             break
         fi
     done
-    [[ $ME_INDEX -eq -1 ]] && die "ERR: Host $ME is not part of the replication chain for $dataset"
+    [[ $ME_INDEX -eq -1 ]] && die "ERR: Host $ME is not part of the replication chain for $local_ds"
     
     # Resolve Graduated Retention
-    REPL_KEEP_PROP=$(get_zfs_prop "repl:$label" "$dataset")
+    REPL_KEEP_PROP=$(get_zfs_prop "repl:$label" "$local_ds")
     if [[ -n "$REPL_KEEP_PROP" ]]; then
         IFS=',' read -r -a k_values <<< "$REPL_KEEP_PROP"
         if [[ -n "${k_values[$ME_INDEX]}" ]]; then
@@ -375,7 +428,7 @@ fi
 
 if [[ "$MARK_ONLY" == true ]]; then
     if [[ "$IS_MASTER" == true ]]; then
-        purge_shipped_snapshots "$dataset" "$label" "$RESOLVED_KEEP"
+        purge_shipped_snapshots "$local_ds" "$label" "$RESOLVED_KEEP"
     fi
     exit 0
 fi
@@ -388,10 +441,6 @@ if [[ "$IS_MASTER" == true ]]; then
     k_flag=$(cat /var/run/keep-$label.txt 2> /dev/null)
     [[ -z "$k_flag" ]] && k_flag=999
     
-    ds_name="${dataset#*/}"
-    my_hostname=$(hostname)
-    local_ds="${my_hostname}-pool/${ds_name}"
-
     echo "Creating snapshot for $local_ds (label: $label)..."
     /usr/sbin/zfs-auto-snapshot --syslog --label=$label --keep=$k_flag "$local_ds"
     [[ $? -eq 0 ]] || die "ERR: snapshot creation failed"
@@ -400,7 +449,7 @@ else
 fi
 
 # Identify local "latest" snapshot for verification
-LATEST_SNAP=$(zfs list -t snap -o name -H -S creation -r "$dataset" | grep "@.*$label" | head -n 1 | cut -d'@' -f2)
+LATEST_SNAP=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*$label" | head -n 1 | cut -d'@' -f2)
 
 # 2. Replication & Audit
 if [[ -n "$NEXT_HOP" ]]; then
@@ -408,11 +457,11 @@ if [[ -n "$NEXT_HOP" ]]; then
     NEXT_HOP_HOST=${NEXT_HOP#*@}
     NEXT_HOP_POOL="${NEXT_HOP_HOST}-pool"
     
-    echo "Replicating $dataset to $NEXT_HOP (Pool: $NEXT_HOP_POOL)..."
+    echo "Replicating $local_ds to $NEXT_HOP (Pool: $NEXT_HOP_POOL)..."
     # Call internal zfsbud logic instead of external script
     zfsbud_opts=""
     if [[ "$initial_send" == true ]]; then zfsbud_opts="-i"; fi
-    zfsbud_core $zfsbud_opts -s "$NEXT_HOP_POOL" -e "ssh $NEXT_HOP" -v "$dataset"
+    zfsbud_core $zfsbud_opts -s "$NEXT_HOP_POOL" -e "ssh $NEXT_HOP" -v "$local_ds"
     
     if [[ $? -ne 0 ]]; then
         echo 9999 > /var/run/keep-$label.txt
@@ -421,10 +470,14 @@ if [[ -n "$NEXT_HOP" ]]; then
         rm /var/run/keep-$label.txt 2>/dev/null
         
         # PROPAGATE & VERIFY
-        echo "Cascading: triggering downstream chain for $dataset on $NEXT_HOP"
+        echo "Cascading: triggering downstream chain for $local_ds on $NEXT_HOP"
         casc_opts=""
         if [[ "$initial_send" == true ]]; then casc_opts="--initial"; fi
-        DOWNSTREAM_OUT=$(ssh "$NEXT_HOP" "zfs-replication.sh $dataset $label $keep_fallback $casc_opts" 2>&1)
+        
+        # GATHER PROPERTIES FOR PROPAGATION
+        PROPS_ARG=$(get_repl_props_encoded "$local_ds")
+        
+        DOWNSTREAM_OUT=$(ssh "$NEXT_HOP" "zfs-replication.sh $raw_dataset $label $keep_fallback $casc_opts --sync-props $PROPS_ARG" 2>&1)
         SSH_STATUS=$?
         
         # Bubble up logs
@@ -437,10 +490,6 @@ if [[ -n "$NEXT_HOP" ]]; then
                 echo "VERIFICATION SUCCESS: Snapshot $LATEST_SNAP confirmed at the end of the chain."
                 
                 # HOUSEKEEPING
-                ds_name="${dataset#*/}"
-                my_hostname=$(hostname)
-                local_ds="${my_hostname}-pool/${ds_name}"
-
                 echo "Marking local snapshots ($local_ds) as shipped..."
                 zfs list -t snap -o name -H -r "$local_ds" | grep "@.*$label" | \
                 while read s; do
@@ -451,7 +500,7 @@ if [[ -n "$NEXT_HOP" ]]; then
                 
                 echo "SENT_LIST:$ARRIVED_LIST"
             else
-                send_smtp_alert "CRITICAL: Verification FAILED for $dataset. Snapshot $LATEST_SNAP NOT found in arrival receipt from $NEXT_HOP."
+                send_smtp_alert "CRITICAL: Verification FAILED for $local_ds. Snapshot $LATEST_SNAP NOT found in arrival receipt from $NEXT_HOP."
                 die "ERR: Audit failed for $LATEST_SNAP"
             fi
         else
@@ -460,10 +509,6 @@ if [[ -n "$NEXT_HOP" ]]; then
     fi
 else
     echo "INFO: End of chain ($ME). Reporting state."
-    ds_name="${dataset#*/}"
-    my_hostname=$(hostname)
-    local_ds="${my_hostname}-pool/${ds_name}"
-
     /usr/sbin/zfs-auto-snapshot --syslog --label=$label --keep=$RESOLVED_KEEP "$local_ds"
     
     # SINK HOUSEKEEPING: Mark as shipped since we are the end of the line
