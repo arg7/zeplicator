@@ -201,13 +201,13 @@ get_zfs_prop() {
 
 send_smtp_alert() {
     local msg=$1
-    local host=$(get_zfs_prop "repl:SMTP_HOST" "$dataset")
-    local port=$(get_zfs_prop "repl:SMTP_PORT" "$dataset")
-    local user=$(get_zfs_prop "repl:SMTP_USER" "$dataset")
-    local pass=$(get_zfs_prop "repl:SMTP_PASSWORD" "$dataset")
-    local from=$(get_zfs_prop "repl:SMTP_FROM" "$dataset")
-    local to=$(get_zfs_prop "repl:SMTP_TO" "$dataset")
-    local proto=$(get_zfs_prop "repl:SMTP_PROTOCOL" "$dataset")
+    local host=$(get_zfs_prop "repl:smtp_host" "$dataset")
+    local port=$(get_zfs_prop "repl:smtp_port" "$dataset")
+    local user=$(get_zfs_prop "repl:smtp_user" "$dataset")
+    local pass=$(get_zfs_prop "repl:smtp_password" "$dataset")
+    local from=$(get_zfs_prop "repl:smtp_from" "$dataset")
+    local to=$(get_zfs_prop "repl:smtp_to" "$dataset")
+    local proto=$(get_zfs_prop "repl:smtp_protocol" "$dataset")
     
     [[ -z "$host" || -z "$to" ]] && return
 
@@ -268,7 +268,7 @@ check_stuck_job() {
     local lock_name="${dataset//\//-}-${label}.lock"
     LOCKFILE="/tmp/${lock_name}"
     
-    local timeout_val=$(get_zfs_prop "repl:TIMEOUT" "$dataset")
+    local timeout_val=$(get_zfs_prop "repl:timeout" "$dataset")
     [[ -z "$timeout_val" ]] && timeout_val="3600"
     
     if [[ -f "$LOCKFILE" ]]; then
