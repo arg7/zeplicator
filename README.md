@@ -37,50 +37,74 @@ The following packages must be installed on all nodes in the replication chain:
    Ensure **Full Mesh** SSH connectivity between all nodes. Use `ssh-keyscan` and distribute public keys to all `authorized_keys`.
 
 3. **ZFS Properties**:
-   Configure the Master node's dataset (e.g., `repl:chain=node1,node2,node3`).
+   Configure the Master node's dataset. All properties prefixed with `repl:` are automatically synced across the chain.
+
+## Configuration Properties (`repl:*`)
+
+The script uses ZFS user properties for configuration. These should be set on the Master dataset and will propagate downstream.
+
+| Property | Description | Example |
+| :--- | :--- | :--- |
+| `repl:chain` | **(Required)** Comma-separated list of hostnames in order. | `node1,node2,node3` |
+| `repl:<hostname>` | Physical pool name for a specific host. | `repl:node1=tank` |
+| `repl:<label>` | Comma-separated retention (keep counts) for each node. | `repl:min1=10,30,90` |
+| `repl:user` | SSH user for replication (default: `root`). | `root` |
+| `repl:timeout` | Seconds before a job is considered stuck (default: `3600`). | `7200` |
+| `repl:suspend` | Globally pause replication if set to `true`. | `false` |
+| `repl:smtp_host` | SMTP server for alerts. | `smtp.example.com` |
+| `repl:smtp_port` | SMTP port (default: `465`). | `465` |
+| `repl:smtp_to` | Destination email for alerts. | `admin@example.com` |
+
+### Pool Name Resolution
+To allow uniform commands across nodes, the script maps logical paths to physical pools:
+1. It looks for `repl:<hostname>` on the dataset.
+2. If not found, it checks for a pool named `pool`.
+3. Fallback: `$(hostname)-pool`.
 
 ## Usage
 
 ### Basic Replication
+Use a generic pool name; the script resolves it locally via `repl:<hostname>`.
 ```bash
-zfs-replication.sh <dataset> <label> <keep_fallback>
+zfs-replication.sh pool/mydata min1 10
 ```
 
 ### Initial Replication
 For the first run (no common snapshots downstream):
 ```bash
-zfs-replication.sh dpool/mydata min1 10 --initial
+zfs-replication.sh pool/mydata min1 10 --initial
 ```
 
 ### Master Promotion & Recovery
-Promotion reorders the `repl:chain` and propagates it. If the new Master has divergent snapshots, use the following recovery options:
+Promotion reorders the `repl:chain` and propagates it. The script uses **Snapshot GUIDs** to ensure consistent ancestry during recovery.
 
 1. **Auto-Discovery (Recommended)**:
-   Find the latest snapshot shared by all nodes and rollback the entire chain to it:
+   Find the latest snapshot shared by all nodes (matching name AND GUID) and rollback:
    ```bash
-   zfs-replication.sh dpool/mydata min1 10 --promote --auto [-y]
+   zfs-replication.sh pool/mydata min1 10 --promote --auto [-y]
    ```
+
 
 2. **Specific Snapshot**:
    Rollback the entire chain to a specific known-good snapshot:
    ```bash
-   zfs-replication.sh dpool/mydata min1 10 --promote --snap <snapshot_name> [-y]
+   zfs-replication.sh pool/mydata min1 10 --promote --snap <snapshot_name> [-y]
    ```
 
 3. **Brutal Startover (Dangerous)**:
    Destroy the dataset on all downstream nodes and perform a fresh full send:
    ```bash
-   zfs-replication.sh dpool/mydata min1 10 --promote --destroy-chain
+   zfs-replication.sh pool/mydata min1 10 --promote --destroy-chain
    ```
 
 ### Pause & Resume
 To globally pause the Master's replication schedule:
 ```bash
-zfs-replication.sh dpool/mydata min1 10 --suspend
+zfs-replication.sh pool/mydata min1 10 --suspend
 ```
 To resume:
 ```bash
-zfs-replication.sh dpool/mydata min1 10 --resume
+zfs-replication.sh pool/mydata min1 10 --resume
 ```
 This sets/unsets the `repl:suspend=true` property on all nodes in the chain.
 
@@ -88,7 +112,7 @@ This sets/unsets the `repl:suspend=true` property on all nodes in the chain.
 
 Add the same cron job to **all nodes**. Only the current Master will act; others will exit gracefully.
 ```cron
-* * * * * root /usr/local/bin/zfs-replication.sh dpool/mydata min1 10 >> /var/log/zfs-replication.log 2>&1
+* * * * * root /usr/local/bin/zfs-replication.sh pool/mydata min1 10 >> /var/log/zfs-replication.log 2>&1
 ```
 
 ## Gotchas & Lessons Learned
