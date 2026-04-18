@@ -48,31 +48,28 @@ The script uses ZFS user properties for configuration. These should be set on th
 
 | Property | Description | Example |
 | :--- | :--- | :--- |
-| `repl:chain` | **(Required)** Comma-separated list of hostnames in order. | `node1,node2,node3` |
-| `repl:<hostname>` | Physical pool name for a specific host. | `repl:node1=tank` |
+| `repl:chain` | **(Required)** Comma-separated list of host aliases. | `node1,node2,node3` |
+| `repl:node:<alias>:fs` | Physical pool name for a specific host alias. | `repl:node:node1:fs=tank` |
+| `repl:node:<alias>:fqdn` | Real address/FQDN for a host alias. | `repl:node:node1:fqdn=10.0.0.5` |
+| `repl:node:<alias>:user` | SSH user for a host alias. | `repl:node:node1:user=repluser` |
 | `repl:keep:<label>:<role>` | Role-based retention (roles: `master`, `middle`, `sink`). | `repl:keep:min1:sink=90` |
 | `repl:keep:<label>:<hostname>` | Host-specific retention (highest priority). | `repl:keep:min1:node1=30` |
-| `repl:user` | SSH user for replication (default: `root`). | `root` |
+| `repl:user` | **(Global)** Fallback SSH user for replication. | `root` |
 
-### Retention Resolution Hierarchy
-When the script runs, it determines the "keep count" using this priority:
-1. `repl:keep:<label>:<hostname>` (Host-specific)
-2. `repl:keep:<label>:<role>` (Role-specific based on chain position)
-3. Command line fallback argument.
+### Node Configuration & Aliases
+The script uses a namespaced configuration system. This allows you to use short aliases in the `repl:chain` while managing real connectivity details separately:
+1. **Alias resolution**: The script finds the alias in `repl:chain`.
+2. **FQDN**: Looks for `repl:node:<alias>:fqdn`, defaults to alias.
+3. **User**: Looks for `repl:node:<alias>:user`, defaults to global `repl:user`, then `root`.
+4. **Pool/FS**: Looks for `repl:node:<alias>:fs`, defaults to `pool`, then `$(alias)-pool`.
 
-This ensures your retention policies are robust even if you promote nodes or reorder the chain.
-
-### Pool Name Resolution
-To allow uniform commands across nodes, the script maps logical paths to physical pools:
-1. It looks for `repl:<hostname>` on the dataset.
-2. If not found, it checks for a pool named `pool`.
-3. Fallback: `$(hostname)-pool`.
+This architecture prevents property collisions and makes the chain easy to reorder or migrate.
 
 
 ## Usage
 
 ### Basic Replication
-Use a generic pool name; the script resolves it locally via `repl:<hostname>`.
+Use a generic pool name; the script resolves it locally via `repl:node:<alias>:fs`.
 ```bash
 zfs-replication.sh pool/mydata min1 10
 ```

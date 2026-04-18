@@ -13,36 +13,61 @@ get_zfs_prop() {
     zfs get -H -o value "$prop" "$ds" 2>/dev/null | grep -v "^-$" | head -n 1
 }
 
-# Resolve pool for a specific node
+# Resolve FQDN/Address for a specific node alias
+resolve_node_fqdn() {
+    local alias=$1
+    local ds_raw=$2
+    local fqdn=$(get_zfs_prop "repl:node:${alias}:fqdn" "$ds_raw")
+    [[ -z "$fqdn" ]] && echo "$alias" || echo "$fqdn"
+}
+
+# Resolve SSH user for a specific node alias
+resolve_node_user() {
+    local alias=$1
+    local ds_raw=$2
+    local user=$(get_zfs_prop "repl:node:${alias}:user" "$ds_raw")
+    if [[ -z "$user" ]]; then
+        user=$(get_zfs_prop "repl:user" "$ds_raw")
+    fi
+    [[ -z "$user" ]] && echo "root" || echo "$user"
+}
+
+# Resolve pool (filesystem) for a specific node alias
 resolve_node_pool() {
-    local node=$1
+    local alias=$1
     local ds_raw=$2
     local pool=""
+    local my_alias=$(hostname) # Assuming hostname matches the alias in the chain
     
     # Pre-flight check: Is node reachable?
-    if [[ "$node" != "$(hostname)" ]]; then
-        if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "$node" "true" 2>/dev/null; then
+    if [[ "$alias" != "$my_alias" ]]; then
+        local fqdn=$(resolve_node_fqdn "$alias" "$ds_raw")
+        local user=$(resolve_node_user "$alias" "$ds_raw")
+        if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "${user}@${fqdn}" "true" 2>/dev/null; then
             return 255
         fi
     fi
 
-    # 1. Check local properties if we are on that node
-    if [[ "$node" == "$(hostname)" ]]; then
-        pool=$(get_zfs_prop "repl:${node}" "$ds_raw")
-        [[ -z "$pool" ]] && pool=$(get_zfs_prop "repl:${node}" "${node}-pool/${ds_raw#*/}")
-    else
-        # 2. Check property via SSH
-        pool=$(ssh "$node" "zfs get -H -o value repl:${node} ${node}-pool/${ds_raw#*/} 2>/dev/null | grep -v '^-$'")
+    # 1. Check namespaced property: repl:node:<alias>:fs
+    pool=$(get_zfs_prop "repl:node:${alias}:fs" "$ds_raw")
+    
+    # 2. Check local properties if we are on that node (fallback search)
+    if [[ -z "$pool" && "$alias" == "$my_alias" ]]; then
+        pool=$(get_zfs_prop "repl:node:${alias}:fs" "${alias}-pool/${ds_raw#*/}")
     fi
     
     if [[ -z "$pool" ]]; then
         # Fallback 1: try generic 'pool'
-        if ssh "$node" "zfs list pool >/dev/null 2>&1"; then
-            pool="pool"
+        local fqdn=$(resolve_node_fqdn "$alias" "$ds_raw")
+        local user=$(resolve_node_user "$alias" "$ds_raw")
+        if [[ "$alias" == "$my_alias" ]]; then
+            if zfs list pool >/dev/null 2>&1; then pool="pool"; fi
         else
-            # Fallback 2: classic naming
-            pool="${node}-pool"
+            if ssh "${user}@${fqdn}" "zfs list pool >/dev/null 2>&1"; then pool="pool"; fi
         fi
+        
+        # Fallback 2: classic naming
+        [[ -z "$pool" ]] && pool="${alias}-pool"
     fi
     echo "$pool"
 }
@@ -77,26 +102,24 @@ find_best_donor() {
     local target_pool=$(resolve_node_pool "$target_node" "$ds_raw")
     
     # Iterate ALL nodes in chain to find someone who shares a GUID with target
-    # We want the node that is FURTHEST from master but has the data (usually Sink)
     for (( k=${#nodes[@]}-1; k>=0; k-- )); do
-        local donor_node="${nodes[k]}"
-        [[ "$donor_node" == "$target_node" ]] && continue
-        [[ "$donor_node" == "$(hostname)" ]] && continue
+        local donor_alias="${nodes[k]}"
+        [[ "$donor_alias" == "$target_node" ]] && continue
+        [[ "$donor_alias" == "$ME" ]] && continue
         
+        local donor_fqdn=$(resolve_node_fqdn "$donor_alias" "$ds_raw")
+        local donor_user=$(resolve_node_user "$donor_alias" "$ds_raw")
+        local donor_target="${donor_user}@${donor_fqdn}"
+
         # Check connectivity to potential donor
-        if ! ssh -o ConnectTimeout=3 "$donor_node" "true" 2>/dev/null; then continue; fi
+        if ! ssh -o ConnectTimeout=3 "$donor_target" "true" 2>/dev/null; then continue; fi
         
-        # Check if donor has a common snapshot with target
-        # We use a clever trick: ask the donor to run zfsbud_core in dry-run/check mode
-        local donor_pool=$(resolve_node_pool "$donor_node" "$ds_raw")
+        local donor_pool=$(resolve_node_pool "$donor_alias" "$ds_raw")
         
-        # A simple remote check for commonality
-        if ssh "$donor_node" "zfs list -t snap -H -r ${donor_pool}/${ds_raw#*/} >/dev/null 2>&1"; then
-            # Donor has snapshots. Now check if any GUID matches the target.
-            # For efficiency, we'll just check if the donor can find a common snap with target.
-            # We'll use our script on the donor to verify!
-            if ssh "$donor_node" "zfs-replication.sh $ds_raw $label 0 --target $target_node --donor >/dev/null 2>&1"; then
-                echo "$donor_node"
+        # Check if donor has snapshots and shares GUID with target
+        if ssh "$donor_target" "zfs list -t snap -H -r ${donor_pool}/${ds_raw#*/} >/dev/null 2>&1"; then
+            if ssh "$donor_target" "zfs-replication.sh $ds_raw $label 0 --target $target_node --donor >/dev/null 2>&1"; then
+                echo "$donor_alias"
                 return 0
             fi
         fi
@@ -653,15 +676,19 @@ if [[ "$SUSPEND" == true || "$RESUME" == true ]]; then
 
     IFS=',' read -r -a nodes <<< "$CURRENT_CHAIN"
     for n in "${nodes[@]}"; do
-        echo "  Setting repl:suspend=$VAL on $n..."
-        # Correctly map remote pool name (host-pool)
-        ssh "$n" "zfs set repl:suspend=$VAL ${n}-pool/${ds_name}" || echo "  Warning: Failed to set property on $n"
+        local n_fqdn=$(resolve_node_fqdn "$n" "$local_ds")
+        local n_user=$(resolve_node_user "$n" "$local_ds")
+        local n_pool=$(resolve_node_pool "$n" "$local_ds")
+        
+        echo "  Setting repl:suspend=$VAL on $n ($n_fqdn)..."
+        ssh "${n_user}@${n_fqdn}" "zfs set repl:suspend=$VAL ${n_pool}/${ds_name}" || echo "  Warning: Failed to set property on $n"
     done
     
     send_smtp_alert "NOTICE: ZFS Replication has been ${ACTION} for dataset $raw_dataset on $(hostname). Master node: ${nodes[0]}. New state: repl:suspend=$VAL"
     exit 0
 fi
 
+# Handle Promotion logic
 # Handle Promotion logic
 if [[ "$PROMOTE" == true ]]; then
     echo "Promoting $my_hostname to Master..."
@@ -701,8 +728,10 @@ if [[ "$PROMOTE" == true ]]; then
             declare -A snap_guids
             for n in "${NEW_NODES[@]}"; do
                 echo "  Querying $n for GUID of $TARGET_SNAP..."
-                local_pool=$(resolve_node_pool "$n" "$raw_dataset")
-                g=$(ssh "$n" "zfs get -H -o value guid ${local_pool}/${ds_name}@$TARGET_SNAP" 2>/dev/null)
+                local local_pool=$(resolve_node_pool "$n" "$raw_dataset")
+                local local_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
+                local local_user=$(resolve_node_user "$n" "$raw_dataset")
+                g=$(ssh "${local_user}@${local_fqdn}" "zfs get -H -o value guid ${local_pool}/${ds_name}@$TARGET_SNAP" 2>/dev/null)
                 if [[ -z "$g" || "$g" == "-" ]]; then
                     die "ERR: Snapshot @$TARGET_SNAP not found on $n"
                 fi
@@ -727,14 +756,17 @@ if [[ "$PROMOTE" == true ]]; then
             
             for n in "${NEW_NODES[@]}"; do
                 echo "  Querying $n..."
-                local_pool=$(resolve_node_pool "$n" "$raw_dataset")
+                local local_pool=$(resolve_node_pool "$n" "$raw_dataset")
+                local local_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
+                local local_user=$(resolve_node_user "$n" "$raw_dataset")
+                local node_target="${local_user}@${local_fqdn}"
 
                 if [[ "$f_node_flag" == true ]]; then
-                    ssh "$n" "zfs list -t snap -H -o name,guid -r ${local_pool}/${ds_name}" 2>/dev/null | awk '{print $1" "$2}' | cut -d'@' -f2 > "$tmp_common"
+                    ssh "$node_target" "zfs list -t snap -H -o name,guid -r ${local_pool}/${ds_name}" 2>/dev/null | awk '{print $1" "$2}' | cut -d'@' -f2 > "$tmp_common"
                     f_node_flag=false
                 else
                     node_tmp="/tmp/zfs-node-snaps.$$"
-                    ssh "$n" "zfs list -t snap -H -o name,guid -r ${local_pool}/${ds_name}" 2>/dev/null | awk '{print $1" "$2}' | cut -d'@' -f2 > "$node_tmp"
+                    ssh "$node_target" "zfs list -t snap -H -o name,guid -r ${local_pool}/${ds_name}" 2>/dev/null | awk '{print $1" "$2}' | cut -d'@' -f2 > "$node_tmp"
                     # Intersect current common with this node's snaps (match both name and guid)
                     grep -Fxf "$tmp_common" "$node_tmp" > "${tmp_common}.new"
                     mv "${tmp_common}.new" "$tmp_common"
@@ -778,14 +810,15 @@ if [[ "$PROMOTE" == true ]]; then
             # 4. Execute Rollbacks
             for n in "${NEW_NODES[@]}"; do
                 echo "Rolling back $n to $TARGET_SNAP..."
-                local_pool=$(resolve_node_pool "$n" "$raw_dataset")
-                ssh "$n" "zfs rollback -r ${local_pool}/${ds_name}@$TARGET_SNAP" || die "ERR: Rollback failed on $n"
+                local local_pool=$(resolve_node_pool "$n" "$raw_dataset")
+                local local_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
+                local local_user=$(resolve_node_user "$n" "$raw_dataset")
+                ssh "${local_user}@${local_fqdn}" "zfs rollback -r ${local_pool}/${ds_name}@$TARGET_SNAP" || die "ERR: Rollback failed on $n"
             done
             echo "Chain successfully consistent at @$TARGET_SNAP"
         fi
     fi
-fi
-
+fi 
 # Apply propagated properties if provided (if not promoting)
 if [[ -n "$sync_props_data" && "$PROMOTE" != true ]]; then
     # Check if dataset exists before applying (it might not on first --initial run)
@@ -889,9 +922,11 @@ LATEST_SNAP=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*
 # 2. Replication & Audit
 REPLICATION_SUCCESS=false
 for hop_node in "${NODES_REMAINING[@]}"; do
-    HOP_TARGET="${REPL_USER}@${hop_node}"
+    local hop_fqdn=$(resolve_node_fqdn "$hop_node" "$raw_dataset")
+    local hop_user=$(resolve_node_user "$hop_node" "$raw_dataset")
+    HOP_TARGET="${hop_user}@${hop_fqdn}"
     
-    echo "Checking connectivity to $hop_node..."
+    echo "Checking connectivity to $hop_node ($hop_fqdn)..."
     NEXT_HOP_POOL=$(resolve_node_pool "$hop_node" "$raw_dataset")
     if [[ $? -eq 255 ]]; then
         echo "ERROR: Node $hop_node is unreachable (Pre-flight). Skipping..."
@@ -912,9 +947,13 @@ for hop_node in "${NODES_REMAINING[@]}"; do
         echo "WARNING: Local replication to $hop_node failed. Searching chain for a better donor..."
         DONOR_NODE=$(find_best_donor "$hop_node" "$raw_dataset")
         if [[ -n "$DONOR_NODE" ]]; then
-            echo "SUCCESS: Found donor peer '$DONOR_NODE'. Delegating healing of '$hop_node'..."
+            local donor_fqdn=$(resolve_node_fqdn "$DONOR_NODE" "$raw_dataset")
+            local donor_user=$(resolve_node_user "$DONOR_NODE" "$raw_dataset")
+            local donor_target="${donor_user}@${donor_fqdn}"
+
+            echo "SUCCESS: Found donor peer '$DONOR_NODE' ($donor_fqdn). Delegating healing of '$hop_node'..."
             # Run the script on the donor to push to the target
-            if ssh "$DONOR_NODE" "zfs-replication.sh $raw_dataset $label $keep_fallback --target $hop_node --donor"; then
+            if ssh "$donor_target" "zfs-replication.sh $raw_dataset $label $keep_fallback --target $hop_node --donor"; then
                 echo "Delegated replication from $DONOR_NODE to $hop_node successful."
                 TRANSFER_DONE=true
             else
