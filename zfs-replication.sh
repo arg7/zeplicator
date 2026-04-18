@@ -47,6 +47,39 @@ resolve_node_pool() {
     echo "$pool"
 }
 
+find_best_donor() {
+    local target_node=$1
+    local ds_raw=$2
+    local target_pool=$(resolve_node_pool "$target_node" "$ds_raw")
+    
+    # Iterate ALL nodes in chain to find someone who shares a GUID with target
+    # We want the node that is FURTHEST from master but has the data (usually Sink)
+    for (( k=${#nodes[@]}-1; k>=0; k-- )); do
+        local donor_node="${nodes[k]}"
+        [[ "$donor_node" == "$target_node" ]] && continue
+        [[ "$donor_node" == "$(hostname)" ]] && continue
+        
+        # Check connectivity to potential donor
+        if ! ssh -o ConnectTimeout=3 "$donor_node" "true" 2>/dev/null; then continue; fi
+        
+        # Check if donor has a common snapshot with target
+        # We use a clever trick: ask the donor to run zfsbud_core in dry-run/check mode
+        local donor_pool=$(resolve_node_pool "$donor_node" "$ds_raw")
+        
+        # A simple remote check for commonality
+        if ssh "$donor_node" "zfs list -t snap -H -r ${donor_pool}/${ds_raw#*/} >/dev/null 2>&1"; then
+            # Donor has snapshots. Now check if any GUID matches the target.
+            # For efficiency, we'll just check if the donor can find a common snap with target.
+            # We'll use our script on the donor to verify!
+            if ssh "$donor_node" "zfs-replication.sh $ds_raw $label 0 --target $target_node --donor >/dev/null 2>&1"; then
+                echo "$donor_node"
+                return 0
+            fi
+        fi
+    done
+    return 1
+}
+
 send_smtp_alert() {
     local msg=$1
     local host=$(get_zfs_prop "repl:smtp_host" "$dataset")
@@ -551,6 +584,8 @@ DESTROY_CHAIN=false
 YES=false
 PROMOTE_SNAP=""
 sync_props_data=""
+TARGET_NODE=""
+IS_DONOR=false
 
 # Parse additional flags
 shift 3
@@ -567,6 +602,8 @@ while [[ $# -gt 0 ]]; do
         -y) YES=true; shift ;;
         --snap) PROMOTE_SNAP="$2"; shift 2 ;;
         --sync-props) sync_props_data="$2"; shift 2 ;;
+        --target) TARGET_NODE="$2"; shift 2 ;;
+        --donor) IS_DONOR=true; shift ;;
         *) shift ;;
     esac
 done
@@ -779,15 +816,20 @@ if [[ -n "$REPL_CHAIN" ]]; then
     fi
 fi
 
+if [[ -n "$TARGET_NODE" ]]; then
+    NODES_REMAINING=("$TARGET_NODE")
+    IS_MASTER=true # Force initiation for manual/delegated targets
+fi
+
 # Cron Safety: Only the master node initiates replication.
-# Downstream nodes only run if explicitly triggered via --cascaded, --promote, or --mark-only.
-if [[ "$IS_MASTER" == false && "$CASCADED" == false && "$PROMOTE" == false && "$MARK_ONLY" == false ]]; then
+# Downstream nodes only run if explicitly triggered via --cascaded, --promote, --mark-only, --target, or --donor.
+if [[ "$IS_MASTER" == false && "$CASCADED" == false && "$PROMOTE" == false && "$MARK_ONLY" == false && -z "$TARGET_NODE" && "$IS_DONOR" == false ]]; then
     echo "INFO: Node $ME is not Master. Skipping initiation (Cron safety)."
     exit 0
 fi
 
 # Suspend check (only affects Master initiation)
-if [[ "$IS_MASTER" == true && "$CASCADED" == false && "$PROMOTE" == false && "$MARK_ONLY" == false ]]; then
+if [[ "$IS_MASTER" == true && "$CASCADED" == false && "$PROMOTE" == false && "$MARK_ONLY" == false && -z "$TARGET_NODE" ]]; then
     SUSPEND_STATE=$(get_zfs_prop "repl:suspend" "$local_ds")
     if [[ "$SUSPEND_STATE" == "true" ]]; then
         echo "INFO: Replication is SUSPENDED (repl:suspend=true). Skipping run."
@@ -806,7 +848,7 @@ fi
 check_stuck_job
 
 # 1. Snapshot creation (Master only)
-if [[ "$IS_MASTER" == true ]]; then
+if [[ "$IS_MASTER" == true && "$CASCADED" == false && "$PROMOTE" == false && -z "$TARGET_NODE" && "$IS_DONOR" == false ]]; then
     k_flag=$(cat /var/run/keep-$label.txt 2> /dev/null)
     [[ -z "$k_flag" ]] && k_flag=999
     
@@ -814,7 +856,13 @@ if [[ "$IS_MASTER" == true ]]; then
     /usr/sbin/zfs-auto-snapshot --syslog --label=$label --keep=$k_flag "$local_ds"
     [[ $? -eq 0 ]] || die "ERR: snapshot creation failed"
 else
-    echo "INFO: Not a master host ($ME), skipping snapshot creation."
+    if [[ "$IS_DONOR" == true ]]; then
+        echo "INFO: Node $ME is acting as Donor. Skipping snapshot creation."
+    elif [[ -n "$TARGET_NODE" ]]; then
+        echo "INFO: Point-to-point transfer to $TARGET_NODE. Skipping snapshot creation."
+    else
+        echo "INFO: Not a master host ($ME), skipping snapshot creation."
+    fi
 fi
 
 # Identify local "latest" snapshot for verification
@@ -836,8 +884,30 @@ for hop_node in "${NODES_REMAINING[@]}"; do
     zfsbud_opts=""
     if [[ "$initial_send" == true ]]; then zfsbud_opts="-i"; fi
     
+    # 2.1 Try local-to-remote first
+    TRANSFER_DONE=false
     if zfsbud_core $zfsbud_opts -s "$NEXT_HOP_POOL" -e "ssh $HOP_TARGET" -v "$local_ds"; then
         echo "Replication to $HOP_TARGET successful."
+        TRANSFER_DONE=true
+    else
+        # 2.2 Local failed. Can we find a peer donor?
+        echo "WARNING: Local replication to $hop_node failed. Searching chain for a better donor..."
+        DONOR_NODE=$(find_best_donor "$hop_node" "$raw_dataset")
+        if [[ -n "$DONOR_NODE" ]]; then
+            echo "SUCCESS: Found donor peer '$DONOR_NODE'. Delegating healing of '$hop_node'..."
+            # Run the script on the donor to push to the target
+            if ssh "$DONOR_NODE" "zfs-replication.sh $raw_dataset $label $keep_fallback --target $hop_node --donor"; then
+                echo "Delegated replication from $DONOR_NODE to $hop_node successful."
+                TRANSFER_DONE=true
+            else
+                echo "ERROR: Delegated replication from $DONOR_NODE failed."
+            fi
+        else
+            echo "ERROR: No suitable donor found for $hop_node."
+        fi
+    fi
+
+    if [[ "$TRANSFER_DONE" == true ]]; then
         REPLICATION_SUCCESS=true
         
         # PROPAGATE & VERIFY
@@ -846,8 +916,7 @@ for hop_node in "${NODES_REMAINING[@]}"; do
         if [[ "$initial_send" == true ]]; then casc_opts="--initial"; fi
         PROPS_ARG=$(get_repl_props_encoded "$local_ds")
         
-        # We run the cascaded script. If it fails, we don't necessarily skip THIS node's success, 
-        # but we do report the verification status.
+        # We run the cascaded script.
         DOWNSTREAM_OUT=$(ssh "$HOP_TARGET" "zfs-replication.sh $raw_dataset $label $keep_fallback $casc_opts --sync-props $PROPS_ARG --cascaded" 2>&1)
         SSH_STATUS=$?
         
@@ -892,16 +961,20 @@ elif [[ ${#NODES_REMAINING[@]} -gt 0 ]]; then
     die "ERR: All downstream replication attempts failed for chain: ${NODES_REMAINING[*]}"
 else
     # End of chain logic (no remaining nodes)
-    echo "INFO: End of chain ($ME). Reporting state."
-    /usr/sbin/zfs-auto-snapshot --syslog --label=$label --keep=$RESOLVED_KEEP "$local_ds"
-    
-    # SINK HOUSEKEEPING
-    echo "Sink node marking snapshots ($local_ds) as shipped..."
-    zfs list -t snap -o name -H -r "$local_ds" | grep "@.*$label" | \
-    while read s; do
-        zfs set zfs-send:shipped=true "$s"
-    done
-    purge_shipped_snapshots "$local_ds" "$label" "$RESOLVED_KEEP"
+    if [[ "$IS_DONOR" == true ]]; then
+        echo "INFO: Donor run complete."
+    else
+        echo "INFO: End of chain ($ME). Reporting state."
+        /usr/sbin/zfs-auto-snapshot --syslog --label=$label --keep=$RESOLVED_KEEP "$local_ds"
+        
+        # SINK HOUSEKEEPING
+        echo "Sink node marking snapshots ($local_ds) as shipped..."
+        zfs list -t snap -o name -H -r "$local_ds" | grep "@.*$label" | \
+        while read s; do
+            zfs set zfs-send:shipped=true "$s"
+        done
+        purge_shipped_snapshots "$local_ds" "$label" "$RESOLVED_KEEP"
+    fi
 
     SINK_LIST=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*$label" | cut -d'@' -f2 | xargs | tr ' ' ',')
     echo "SENT_LIST:$SINK_LIST"
