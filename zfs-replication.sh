@@ -65,19 +65,7 @@ resolve_retention() {
     # 2. Role-specific: repl:keep:<label>:<master|middle|sink>
     [[ -z "$val" ]] && val=$(get_zfs_prop "repl:keep:${lbl}:${role}" "$ds")
     
-    # 3. Positional (Legacy): repl:<label>
-    if [[ -z "$val" ]]; then
-        local positional=$(get_zfs_prop "repl:${lbl}" "$ds")
-        if [[ -n "$positional" ]]; then
-            IFS=',' read -r -a k_values <<< "$positional"
-            # Ensure the index exists in the array
-            if [[ -n "${k_values[$ME_INDEX]}" ]]; then
-                val="${k_values[$ME_INDEX]}"
-            fi
-        fi
-    fi
-    
-    # 4. Final Fallback
+    # 3. Final Fallback
     [[ -z "$val" ]] && val="$fallback"
     
     echo "$val"

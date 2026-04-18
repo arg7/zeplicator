@@ -52,15 +52,13 @@ The script uses ZFS user properties for configuration. These should be set on th
 | `repl:<hostname>` | Physical pool name for a specific host. | `repl:node1=tank` |
 | `repl:keep:<label>:<role>` | Role-based retention (roles: `master`, `middle`, `sink`). | `repl:keep:min1:sink=90` |
 | `repl:keep:<label>:<hostname>` | Host-specific retention (highest priority). | `repl:keep:min1:node1=30` |
-| `repl:<label>` | (Legacy) Comma-separated retention for each node. | `10,30,90` |
 | `repl:user` | SSH user for replication (default: `root`). | `root` |
 
 ### Retention Resolution Hierarchy
 When the script runs, it determines the "keep count" using this priority:
 1. `repl:keep:<label>:<hostname>` (Host-specific)
 2. `repl:keep:<label>:<role>` (Role-specific based on chain position)
-3. `repl:<label>` (Positional legacy list)
-4. Command line fallback argument.
+3. Command line fallback argument.
 
 This ensures your retention policies are robust even if you promote nodes or reorder the chain.
 
