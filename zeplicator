@@ -1,0 +1,426 @@
+#!/bin/bash
+
+# /scripts/zeplicator - Modular ZFS Replication Manager
+# Main orchestrator script
+
+LIB_DIR=$(dirname "$(readlink -f "$0")")
+
+# Phase 1: Source library modules
+source "${LIB_DIR}/zfs-common.lib.sh"
+source "${LIB_DIR}/zfs-alerts.lib.sh"
+source "${LIB_DIR}/zfs-retention.lib.sh"
+source "${LIB_DIR}/zfs-transfer.lib.sh"
+
+# Params
+raw_dataset=$1
+label=${2:-"frequently"}
+keep_fallback=${3:-"10"}
+
+# Early local dataset resolution
+my_hostname=$(hostname)
+
+# Resolve local pool name from node-specific property (e.g., repl:node:node1:fs=node1-pool/data1)
+configured_ds=$(get_zfs_prop "repl:node:${my_hostname}:fs" "$raw_dataset")
+
+if [[ -n "$configured_ds" && "$configured_ds" != "-" ]]; then
+    local_ds="$configured_ds"
+else
+    # Fallback to legacy or simple pool/ds resolution
+    ds_name="${raw_dataset#*/}"
+    configured_pool=$(get_zfs_prop "repl:node:${my_hostname}:fs" "$raw_dataset")
+    if [[ -n "$configured_pool" && "$configured_pool" != "-" ]]; then
+        if [[ "$configured_pool" == *"/"* ]]; then
+            local_ds="$configured_pool"
+        else
+            local_ds="${configured_pool}/${ds_name}"
+        fi
+    else
+        # Last resort fallback
+        local_ds="${my_hostname}-pool/${ds_name}"
+    fi
+fi
+dataset=$local_ds # Ensure helper functions use the local path
+
+MARK_ONLY=false
+initial_send=false
+PROMOTE=false
+CASCADED=false
+SUSPEND=false
+RESUME=false
+AUTO=false
+DESTROY_CHAIN=false
+YES=false
+PROMOTE_SNAP=""
+sync_props_data=""
+TARGET_NODE=""
+IS_DONOR=false
+
+# Parse additional flags
+shift 3
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --mark-only) MARK_ONLY=true; shift ;;
+        --initial) initial_send=true; shift ;;
+        --promote) PROMOTE=true; shift ;;
+        --suspend) SUSPEND=true; shift ;;
+        --resume) RESUME=true; shift ;;
+        --cascaded) CASCADED=true; shift ;;
+        --auto) AUTO=true; shift ;;
+        --destroy-chain) DESTROY_CHAIN=true; shift ;;
+        -y) YES=true; shift ;;
+        --snap) PROMOTE_SNAP="$2"; shift 2 ;;
+        --sync-props) sync_props_data="$2"; shift 2 ;;
+        --target) TARGET_NODE="$2"; shift 2 ;;
+        --donor) IS_DONOR=true; shift ;;
+        *) shift ;;
+    esac
+done
+
+# Handle Suspend/Resume logic
+if [[ "$SUSPEND" == true || "$RESUME" == true ]]; then
+    ACTION="SUSPENDED"
+    VAL="true"
+    if [[ "$RESUME" == true ]]; then 
+        ACTION="RESUMED"
+        VAL="false"
+    fi
+
+    echo "${ACTION} replication for $raw_dataset..."
+    
+    CURRENT_CHAIN=$(get_zfs_prop "repl:chain" "$local_ds")
+    if [[ -z "$CURRENT_CHAIN" ]]; then
+        die "ERR: Cannot ${ACTION}, no existing repl:chain found on $local_ds. Please run from a configured node."
+    fi
+
+    IFS=',' read -r -a nodes <<< "$CURRENT_CHAIN"
+    for n in "${nodes[@]}"; do
+        n_fqdn=$(resolve_node_fqdn "$n" "$local_ds")
+        n_user=$(resolve_node_user "$n" "$local_ds")
+        n_pool=$(resolve_node_pool "$n" "$local_ds")
+        
+        echo "  Setting repl:suspend=$VAL on $n ($n_fqdn)..."
+        ssh "${n_user}@${n_fqdn}" "zfs set repl:suspend=$VAL ${n_pool}/${ds_name}" || echo "  Warning: Failed to set property on $n"
+    done
+    
+    send_smtp_alert "NOTICE: ZFS Replication has been ${ACTION} for dataset $raw_dataset on $(hostname). Master node: ${nodes[0]}. New state: repl:suspend=$VAL"
+    exit 0
+fi
+
+# Handle Promotion logic
+if [[ "$PROMOTE" == true ]]; then
+    echo "Promoting $my_hostname to Master..."
+    
+    CURRENT_CHAIN=$(get_zfs_prop "repl:chain" "$local_ds")
+    if [[ -z "$CURRENT_CHAIN" ]]; then die "ERR: Cannot promote, no existing repl:chain found on $local_ds"; fi
+
+    IFS=',' read -r -a nodes <<< "$CURRENT_CHAIN"
+    NEW_NODES=("$my_hostname")
+    for n in "${nodes[@]}"; do
+        if [[ "$n" != "$my_hostname" ]]; then
+            NEW_NODES+=("$n")
+        fi
+    done
+    NEW_CHAIN=$(IFS=','; echo "${NEW_NODES[*]}")
+    
+    if [[ "$CURRENT_CHAIN" != "$NEW_CHAIN" ]]; then
+        echo "  Updating chain: $CURRENT_CHAIN -> $NEW_CHAIN"
+        zfs set repl:chain="$NEW_CHAIN" "$local_ds"
+        send_smtp_alert "NOTICE: Node $my_hostname has been PROMOTED to Master for dataset $raw_dataset. New chain: $NEW_CHAIN"
+        REPL_CHAIN="$NEW_CHAIN"
+        IS_MASTER=true
+        ME_INDEX=0
+    else
+        echo "  $my_hostname is already Master in local config."
+    fi
+
+    if [[ "$AUTO" == true || -n "$PROMOTE_SNAP" || "$DESTROY_CHAIN" == true ]]; then
+        TARGET_SNAP=""
+        if [[ -n "$PROMOTE_SNAP" ]]; then
+            TARGET_SNAP="$PROMOTE_SNAP"
+            echo "Checking if snapshot $TARGET_SNAP exists on all nodes and has consistent GUID..."
+            
+            declare -A snap_guids
+            for n in "${NEW_NODES[@]}"; do
+                echo "  Querying $n for GUID of $TARGET_SNAP..."
+                local_pool=$(resolve_node_pool "$n" "$raw_dataset")
+                local_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
+                local_user=$(resolve_node_user "$n" "$raw_dataset")
+                g=$(ssh "${local_user}@${local_fqdn}" "zfs get -H -o value guid ${local_pool}/${ds_name}@$TARGET_SNAP" 2>/dev/null)
+                if [[ -z "$g" || "$g" == "-" ]]; then
+                    die "ERR: Snapshot @$TARGET_SNAP not found on $n"
+                fi
+                snap_guids["$n"]=$g
+            done
+            
+            f_node="${NEW_NODES[0]}"
+            ref_guid=${snap_guids[$f_node]}
+            for n in "${NEW_NODES[@]}"; do
+                if [[ "${snap_guids[$n]}" != "$ref_guid" ]]; then
+                    die "ERR: Snapshot @$TARGET_SNAP exists on all nodes but GUIDs mismatch! ($f_node: $ref_guid vs $n: ${snap_guids[$n]}). The chain has diverged."
+                fi
+            done
+            echo "Snapshot @$TARGET_SNAP is consistent across all nodes (GUID: $ref_guid)."
+        else
+            echo "Auto-discovering latest common snapshot across the chain (using GUIDs)..."
+            tmp_common="/tmp/zfs-common-snaps.$$"
+            f_node_flag=true
+            
+            for n in "${NEW_NODES[@]}"; do
+                echo "  Querying $n..."
+                local_pool=$(resolve_node_pool "$n" "$raw_dataset")
+                local_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
+                local_user=$(resolve_node_user "$n" "$raw_dataset")
+                node_target="${local_user}@${local_fqdn}"
+
+                if [[ "$f_node_flag" == true ]]; then
+                    ssh "$node_target" "zfs list -t snap -H -o name,guid -r ${local_pool}/${ds_name}" 2>/dev/null | awk '{print $1" "$2}' | cut -d'@' -f2 > "$tmp_common"
+                    f_node_flag=false
+                else
+                    node_tmp="/tmp/zfs-node-snaps.$$"
+                    ssh "$node_target" "zfs list -t snap -H -o name,guid -r ${local_pool}/${ds_name}" 2>/dev/null | awk '{print $1" "$2}' | cut -d'@' -f2 > "$node_tmp"
+                    grep -Fxf "$tmp_common" "$node_tmp" > "${tmp_common}.new"
+                    mv "${tmp_common}.new" "$tmp_common"
+                    rm -f "$node_tmp"
+                fi
+                [[ ! -s "$tmp_common" ]] && break
+            done
+
+            if [[ -s "$tmp_common" ]]; then
+                latest_line=$(tail -n 1 "$tmp_common")
+                TARGET_SNAP=$(echo "$latest_line" | awk '{print $1}')
+                target_guid=$(echo "$latest_line" | awk '{print $2}')
+                echo "Found latest common snapshot: $TARGET_SNAP (GUID: $target_guid)"
+            fi
+            rm -f "$tmp_common"
+        fi
+
+        if [[ "$DESTROY_CHAIN" == true && -n "$TARGET_SNAP" ]]; then
+            echo "ABORT: Common snapshot @$TARGET_SNAP found! Destruction is NOT necessary."
+            exit 1
+        fi
+        
+        if [[ "$AUTO" == true || -n "$PROMOTE_SNAP" ]]; then
+            if [[ -z "$TARGET_SNAP" ]]; then
+                die "ERR: Could not find a common snapshot across all nodes. Use --destroy-chain if you want to start fresh."
+            fi
+
+            if [[ "$YES" != true ]]; then
+                echo -n "Are you sure you want to rollback ALL nodes in the chain to @$TARGET_SNAP? (y/N): "
+                read -r resp
+                if [[ "$resp" != "y" ]]; then die "Aborted by user."; fi
+            fi
+
+            for n in "${NEW_NODES[@]}"; do
+                echo "Rolling back $n to $TARGET_SNAP..."
+                local_pool=$(resolve_node_pool "$n" "$raw_dataset")
+                local_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
+                local_user=$(resolve_node_user "$n" "$raw_dataset")
+                ssh "${local_user}@${local_fqdn}" "zfs rollback -r ${local_pool}/${ds_name}@$TARGET_SNAP" || die "ERR: Rollback failed on $n"
+            done
+            echo "Chain successfully consistent at @$TARGET_SNAP"
+        fi
+    fi
+fi 
+
+# Apply propagated properties
+if [[ -n "$sync_props_data" && "$PROMOTE" != true ]]; then
+    if zfs list "$local_ds" >/dev/null 2>&1; then
+        apply_repl_props "$local_ds" "$sync_props_data"
+    else
+        echo "INFO: Dataset $local_ds not found, skipping property sync (likely initial run)."
+    fi
+fi
+
+# Identity & Configuration Discovery
+REPL_CHAIN=$(get_zfs_prop "repl:chain" "$local_ds")
+REPL_USER=$(get_zfs_prop "repl:user" "$local_ds")
+[[ -z "$REPL_USER" ]] && REPL_USER="root"
+
+echo "Start: $(date); Dataset: $local_ds; Label: $label"
+
+[[ -n "$raw_dataset" ]] || die "dataset not specified"
+ME=$(hostname)
+NEXT_HOP=""
+IS_MASTER=false
+ME_INDEX=-1
+RESOLVED_KEEP=$keep_fallback
+
+if [[ -n "$REPL_CHAIN" ]]; then
+    IFS=',' read -r -a nodes <<< "$REPL_CHAIN"
+    NODES_REMAINING=()
+    for i in "${!nodes[@]}"; do
+        if [[ "${nodes[i]}" == "$ME" ]]; then
+            ME_INDEX=$i
+            if [[ $i -eq 0 ]]; then IS_MASTER=true; fi
+            for (( j=i+1; j<${#nodes[@]}; j++ )); do
+                NODES_REMAINING+=("${nodes[j]}")
+            done
+            if (( ${#NODES_REMAINING[@]} > 0 )); then
+                NEXT_HOP="${REPL_USER}@${NODES_REMAINING[0]}"
+            fi
+            break
+        fi
+    done
+    [[ $ME_INDEX -eq -1 ]] && die "ERR: Host $ME is not part of the replication chain for $local_ds"
+    
+    RESOLVED_KEEP=$(resolve_retention "$local_ds" "$label" "$keep_fallback")
+    echo "INFO: Using dynamic retention for $label: $RESOLVED_KEEP (Role: $( [[ $ME_INDEX -eq 0 ]] && echo "master" || ( [[ $ME_INDEX -eq $((${#nodes[@]}-1)) ]] && echo "sink" || echo "middle" ) ))"
+fi
+
+if [[ -n "$TARGET_NODE" ]]; then
+    NODES_REMAINING=("$TARGET_NODE")
+    IS_MASTER=true
+fi
+
+if [[ "$IS_MASTER" == false && "$CASCADED" == false && "$PROMOTE" == false && "$MARK_ONLY" == false && -z "$TARGET_NODE" && "$IS_DONOR" == false ]]; then
+    echo "INFO: Node $ME is not Master. Skipping initiation (Cron safety)."
+    exit 0
+fi
+
+if [[ "$IS_MASTER" == true && "$CASCADED" == false && "$PROMOTE" == false && "$MARK_ONLY" == false && -z "$TARGET_NODE" ]]; then
+    SUSPEND_STATE=$(get_zfs_prop "repl:suspend" "$local_ds")
+    if [[ "$SUSPEND_STATE" == "true" ]]; then
+        echo "INFO: Replication is SUSPENDED (repl:suspend=true). Skipping run."
+        exit 0
+    fi
+fi
+
+if [[ "$MARK_ONLY" == true ]]; then
+    if [[ "$IS_MASTER" == true ]]; then
+        purge_shipped_snapshots "$local_ds" "$label" "$RESOLVED_KEEP"
+    fi
+    exit 0
+fi
+
+check_stuck_job
+
+# 1. Snapshot creation (Master only)
+if [[ "$IS_MASTER" == true && "$CASCADED" == false && "$PROMOTE" == false && -z "$TARGET_NODE" && "$IS_DONOR" == false ]]; then
+    k_flag=$(cat /var/run/keep-$label.txt 2> /dev/null)
+    [[ -z "$k_flag" ]] && k_flag=999
+    
+    echo "Creating snapshot for $local_ds (label: $label)..."
+    /usr/sbin/zfs-auto-snapshot --syslog --label=$label --keep=$k_flag "$local_ds"
+    [[ $? -eq 0 ]] || die "ERR: snapshot creation failed"
+else
+    if [[ "$IS_DONOR" == true ]]; then
+        echo "INFO: Node $ME is acting as Donor. Skipping snapshot creation."
+    elif [[ -n "$TARGET_NODE" ]]; then
+        echo "INFO: Point-to-point transfer to $TARGET_NODE. Skipping snapshot creation."
+    else
+        echo "INFO: Not a master host ($ME), skipping snapshot creation."
+    fi
+fi
+
+LATEST_SNAP=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*$label" | head -n 1 | cut -d'@' -f2)
+
+# 2. Replication & Audit
+REPLICATION_SUCCESS=false
+for hop_node in "${NODES_REMAINING[@]}"; do
+    hop_fqdn=$(resolve_node_fqdn "$hop_node" "$raw_dataset")
+    hop_user=$(resolve_node_user "$hop_node" "$raw_dataset")
+    HOP_TARGET="${hop_user}@${hop_fqdn}"
+    
+    echo "Checking connectivity to $hop_node ($hop_fqdn)..."
+    NEXT_HOP_POOL=$(resolve_node_pool "$hop_node" "$raw_dataset")
+    if [[ $? -eq 255 ]]; then
+        echo "ERROR: Node $hop_node is unreachable (Pre-flight). Skipping..."
+        continue
+    fi
+    
+    echo "Attempting replication: $local_ds -> $HOP_TARGET (Pool: $NEXT_HOP_POOL)..."
+    zfsbud_opts=""
+    if [[ "$initial_send" == true ]]; then zfsbud_opts="-i"; fi
+    
+    TRANSFER_DONE=false
+    if zfsbud_core $zfsbud_opts -s "$NEXT_HOP_POOL" -e "ssh $HOP_TARGET" -v "$local_ds"; then
+        echo "Replication to $HOP_TARGET successful."
+        TRANSFER_DONE=true
+    else
+        echo "WARNING: Local replication to $hop_node failed. Searching chain for a better donor..."
+        DONOR_NODE=$(find_best_donor "$hop_node" "$raw_dataset")
+        if [[ -n "$DONOR_NODE" ]]; then
+            donor_fqdn=$(resolve_node_fqdn "$DONOR_NODE" "$raw_dataset")
+            donor_user=$(resolve_node_user "$DONOR_NODE" "$raw_dataset")
+            donor_target="${donor_user}@${donor_fqdn}"
+
+            echo "SUCCESS: Found donor peer '$DONOR_NODE' ($donor_fqdn). Delegating healing of '$hop_node'..."
+            if ssh "$donor_target" "/scripts/zeplicator $raw_dataset $label $keep_fallback --target $hop_node --donor"; then
+                echo "Delegated replication from $DONOR_NODE to $hop_node successful."
+                TRANSFER_DONE=true
+            else
+                echo "ERROR: Delegated replication from $DONOR_NODE failed."
+            fi
+        else
+            echo "ERROR: No suitable donor found for $hop_node."
+        fi
+    fi
+
+    if [[ "$TRANSFER_DONE" == true ]]; then
+        REPLICATION_SUCCESS=true
+        
+        if [[ "$initial_send" == true ]]; then
+            send_smtp_alert "SUCCESS: Initial replication of $local_ds completed successfully to $hop_node ($HOP_TARGET)."
+        fi
+        
+        echo "Cascading: triggering downstream chain for $local_ds on $HOP_TARGET"
+        casc_opts=""
+        if [[ "$initial_send" == true ]]; then casc_opts="--initial"; fi
+        PROPS_ARG=$(get_repl_props_encoded "$local_ds")
+        
+        DOWNSTREAM_OUT=$(ssh "$HOP_TARGET" "/scripts/zeplicator $raw_dataset $label $keep_fallback $casc_opts --sync-props $PROPS_ARG --cascaded" 2>&1)
+        SSH_STATUS=$?
+        
+        echo "$DOWNSTREAM_OUT" | grep -v "^SENT_LIST:"
+        
+        if [[ $SSH_STATUS -eq 0 ]]; then
+            ARRIVED_LIST=$(echo "$DOWNSTREAM_OUT" | grep "^SENT_LIST:" | cut -d':' -f2)
+            
+            if [[ -n "$LATEST_SNAP" && ",$ARRIVED_LIST," == *",$LATEST_SNAP,"* ]]; then
+                echo "VERIFICATION SUCCESS: Snapshot $LATEST_SNAP confirmed reaching a sink node."
+            else
+                echo "WARNING: Verification FAILED. Snapshot $LATEST_SNAP not confirmed at end of chain, but transfer to $hop_node succeeded."
+            fi
+        else
+            echo "WARNING: Downstream cascade from $hop_node failed (Code: $SSH_STATUS)."
+        fi
+        break
+    else
+        echo "ERROR: Replication to $hop_node failed. Skipping to next available node in chain..."
+    fi
+done
+
+if [[ "$REPLICATION_SUCCESS" == true ]]; then
+    echo "Marking local snapshots ($local_ds) as shipped..."
+    zfs list -t snap -o name -H -r "$local_ds" | grep "@.*$label" | \
+    while read s; do
+        zfs set zfs-send:shipped=true "$s"
+    done
+    purge_shipped_snapshots "$local_ds" "$label" "$RESOLVED_KEEP"
+    
+    MY_LIST=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*$label" | cut -d'@' -f2 | xargs | tr ' ' ',')
+    echo "SENT_LIST:$MY_LIST"
+elif [[ ${#NODES_REMAINING[@]} -gt 0 ]]; then
+    echo 9999 > /var/run/keep-$label.txt
+    die "ERR: All downstream replication attempts failed for chain: ${NODES_REMAINING[*]}"
+else
+    if [[ "$IS_DONOR" == true ]]; then
+        echo "INFO: Donor run complete."
+    else
+        echo "INFO: End of chain ($ME). Reporting state."
+        /usr/sbin/zfs-auto-snapshot --syslog --label=$label --keep=$RESOLVED_KEEP "$local_ds"
+        
+        echo "Sink node marking snapshots ($local_ds) as shipped..."
+        zfs list -t snap -o name -H -r "$local_ds" | grep "@.*$label" | \
+        while read s; do
+            zfs set zfs-send:shipped=true "$s"
+        done
+        purge_shipped_snapshots "$local_ds" "$label" "$RESOLVED_KEEP"
+    fi
+
+    SINK_LIST=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*$label" | cut -d'@' -f2 | xargs | tr ' ' ',')
+    echo "SENT_LIST:$SINK_LIST"
+fi
+
+echo "Done: $(date)"
+exit 0
