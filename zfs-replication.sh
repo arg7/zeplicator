@@ -987,6 +987,10 @@ donor_target="${donor_user}@${donor_fqdn}"
     if [[ "$TRANSFER_DONE" == true ]]; then
         REPLICATION_SUCCESS=true
         
+        if [[ "$initial_send" == true ]]; then
+            send_smtp_alert "SUCCESS: Initial replication of $local_ds completed successfully to $hop_node ($HOP_TARGET)."
+        fi
+        
         # PROPAGATE & VERIFY
         echo "Cascading: triggering downstream chain for $local_ds on $HOP_TARGET"
         casc_opts=""
