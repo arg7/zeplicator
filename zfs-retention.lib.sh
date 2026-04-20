@@ -31,14 +31,14 @@ purge_shipped_snapshots() {
     local lbl=$2
     local k_count=$3
     
-    echo "  🔄 Performing shipped-aware rotation for $ds (label: $lbl, keep: $k_count)..."
+    echo "${CHAIN_PREFIX}  🔄 Performing shipped-aware rotation for $ds (label: $lbl, keep: $k_count)..."
     
     # Get snapshots matching label, sorted by creation date (newest first)
     mapfile -t snaps < <(zfs list -t snap -H -o name,zfs-send:shipped -S creation -r "$ds" | grep "@.*$lbl")
     
     local count=${#snaps[@]}
     if [[ $count -le $k_count ]]; then
-        echo "  ✅ Snapshot count ($count) is within limit ($k_count). Skipping purge."
+        echo "${CHAIN_PREFIX}  ✅ Snapshot count ($count) is within limit ($k_count). Skipping purge."
         return
     fi
     
@@ -56,10 +56,10 @@ purge_shipped_snapshots() {
         fi
 
         if [[ "$is_shipped" == true ]]; then
-            echo "  🗑️  Purging old shipped snapshot: $snap_name"
+            echo "${CHAIN_PREFIX}  🗑️  Purging old shipped snapshot: $snap_name"
             zfs destroy "$snap_name"
         else
-            echo "  🛡️  KEEPING old snapshot (NOT YET SHIPPED): $snap_name"
+            echo "${CHAIN_PREFIX}  🛡️  KEEPING old snapshot (NOT YET SHIPPED): $snap_name"
         fi
     done
 }

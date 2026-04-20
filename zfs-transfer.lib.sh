@@ -176,10 +176,10 @@ zfsbud_core() {
     local latest_snapshot_source=$(echo "$last_snapshot_source" | awk '{print $1}')
     local remote_ds="$1"
     if [[ ${latest_snapshot_source#*@} == "$last_snapshot_common" ]]; then
-      zbud_msg "Skipping incremental: already up to date."
+      zbud_msg "  ⏩ Skipping incremental: already up to date."
       return 0
     fi
-    zbud_msg "Sending incremental: $last_snapshot_common -> ${latest_snapshot_source#*@} to $remote_ds"
+    zbud_msg "  🚀 Sending incremental: $last_snapshot_common -> ${latest_snapshot_source#*@} to $remote_ds"
     
     # Identify LOCAL dataset to send from
     local local_ds="$dataset"
