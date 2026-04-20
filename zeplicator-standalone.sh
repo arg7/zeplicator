@@ -1,6 +1,6 @@
 #!/bin/bash
 # zeplicator-standalone.sh - Compiled ZFS Replication Manager
-# Built on: Mon Apr 20 03:29:56 PM CEST 2026
+# Built on: Mon Apr 20 03:54:21 PM CEST 2026
 
 # --- BEGIN zfs-common.lib.sh ---
 
@@ -1161,11 +1161,10 @@ check_stuck_job
 
 # 1. Snapshot creation (Master only)
 if [[ "$IS_MASTER" == true && "$CASCADED" == false && "$PROMOTE" == false && -z "$TARGET_NODE" && "$IS_DONOR" == false ]]; then
-    k_flag=$(cat /var/run/keep-$label.txt 2> /dev/null)
-    [[ -z "$k_flag" ]] && k_flag=999
-    
-    echo "${CHAIN_PREFIX}  ⏳ Creating snapshot for $local_ds (label: $label)..."
-    /usr/sbin/zfs-auto-snapshot --syslog --label=$label --keep=$k_flag "$local_ds" 2>&1 | indent_output
+    timestamp=$(date -u +%Y-%m-%d-%H%M)
+    snap_name="${local_ds}@zeplicator_${label}-${timestamp}"
+    echo "${CHAIN_PREFIX}  ⏳ Creating snapshot: $snap_name"
+    zfs snapshot "$snap_name" 2>&1 | indent_output
     [[ ${PIPESTATUS[0]} -eq 0 ]] || die "ERR: snapshot creation failed"
 else
     if [[ "$IS_DONOR" == true ]]; then
@@ -1272,7 +1271,6 @@ if [[ "$REPLICATION_SUCCESS" == true ]]; then
         echo "SENT_LIST:$MY_LIST"
     fi
 elif [[ ${#NODES_REMAINING[@]} -gt 0 ]]; then
-    echo 9999 > /var/run/keep-$label.txt
     die "ERR: All downstream replication attempts failed for chain: ${NODES_REMAINING[*]}"
 else
     if [[ "$IS_DONOR" == true ]]; then

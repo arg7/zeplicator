@@ -21,7 +21,6 @@ A robust, cascading ZFS replication script designed for multi-node chains. It ha
 The following packages must be installed on all nodes:
 
 - `zfsutils-linux`
-- `zfs-auto-snapshot`
 - `openssh-server` / `openssh-client`
 - `mbuffer`
 - `zstd`
