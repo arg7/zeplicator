@@ -90,6 +90,12 @@ zeplicator pool/mydata --config --import /tmp/config.txt
 zeplicator pool/mydata min1 10
 ```
 
+### Explicit Identity Override
+If auto-discovery fails (hostname doesn't match and IP isn't in DNS/config), you can force the node's alias:
+```bash
+zeplicator pool/mydata min1 10 --alias node2
+```
+
 ### Initial Replication
 For the first run (no common snapshots downstream). Sends a success email upon completion.
 ```bash
