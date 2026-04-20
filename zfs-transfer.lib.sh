@@ -26,7 +26,7 @@ find_best_donor() {
         local donor_pool=$(resolve_node_pool "$donor_alias" "$ds_raw")
         
         # Check if donor has snapshots and shares GUID with target
-        if ssh "$donor_target" "zfs list -t snap -H -r ${donor_pool}/${ds_raw#*/} >/dev/null 2>&1"; then
+        if ssh "$donor_target" "zfs list -t snapshot -H -r ${donor_pool}/${ds_raw#*/} >/dev/null 2>&1"; then
             if ssh "$donor_target" "$ZEPLICATOR_CMD $ds_raw $label 0 --alias $donor_alias --target $target_node --donor >/dev/null 2>&1"; then
                 echo "$donor_alias"
                 return 0
@@ -42,7 +42,11 @@ zfsbud_core() {
   local log_file="$HOME/zfsbud_internal.log"
   local RATE=20M
   local BUF=64M
-  local resume="-s"
+  
+  # Conditional flag support based on ZFS properties
+  local send_flags=""
+  local resume=""
+
   local snapshot_prefix=$(zbud_config_get default_snapshot_prefix)
   
   local create remove_old send initial recursive_send recursive_create recursive_destroy remote_shell verbose log dry_run snapshot_label destination_parent_dataset
@@ -151,6 +155,16 @@ zfsbud_core() {
     local timeout_val=$(get_zfs_prop "repl:timeout" "$dataset")
     [[ -z "$timeout_val" || "$timeout_val" == "-" ]] && timeout_val="3600"
 
+    # Configure flags based on properties
+    local use_raw=$(get_zfs_prop "repl:zfs:raw" "$dataset")
+    local use_resume=$(get_zfs_prop "repl:zfs:resume" "$dataset")
+    
+    local send_args="-R"
+    local recv_args="-F -u"
+    
+    [[ "$use_raw" == "true" ]] && send_args="-w $send_args"
+    [[ "$use_resume" == "true" ]] && recv_args="-s $recv_args"
+
     if [ -z "$dry_run" ]; then
       # FORCE CLEANUP of destination ONLY if --destroy-chain is set
       if [[ "$DESTROY_CHAIN" == true ]]; then
@@ -163,9 +177,9 @@ zfsbud_core() {
       fi
 
       if [ -n "$remote_shell" ]; then
-        ! timeout "$timeout_val" bash -c "zfs send -w -R \"$latest_snapshot_source\" 2>>/tmp/zfs-replication.err | mbuffer -q -r \"$RATE\" -m \"$BUF\" 2>>/tmp/zfs-replication.err | zstd 2>>/tmp/zfs-replication.err | $remote_shell \"zstd -d | zfs recv $resume -F -u $remote_ds\" 2>>/tmp/zfs-replication.err" && return 1
+        ! timeout "$timeout_val" bash -c "zfs send $send_args \"$latest_snapshot_source\" 2>>/tmp/zfs-replication.err | mbuffer -q -r \"$RATE\" -m \"$BUF\" 2>>/tmp/zfs-replication.err | zstd 2>>/tmp/zfs-replication.err | $remote_shell \"zstd -d | zfs recv $recv_args $remote_ds\" 2>>/tmp/zfs-replication.err" && return 1
       else
-        ! timeout "$timeout_val" bash -c "zfs send -w -R \"$latest_snapshot_source\" 2>>/tmp/zfs-replication.err | zfs recv $resume -F -u \"$remote_ds\" 2>>/tmp/zfs-replication.err" && return 1
+        ! timeout "$timeout_val" bash -c "zfs send $send_args \"$latest_snapshot_source\" 2>>/tmp/zfs-replication.err | zfs recv $recv_args \"$remote_ds\" 2>>/tmp/zfs-replication.err" && return 1
       fi
     fi
     last_snapshot_common="${latest_snapshot_source#*@}"
@@ -187,11 +201,21 @@ zfsbud_core() {
     local timeout_val=$(get_zfs_prop "repl:timeout" "$dataset")
     [[ -z "$timeout_val" || "$timeout_val" == "-" ]] && timeout_val="3600"
 
+    # Configure flags based on properties
+    local use_raw=$(get_zfs_prop "repl:zfs:raw" "$dataset")
+    local use_resume=$(get_zfs_prop "repl:zfs:resume" "$dataset")
+    
+    local send_args="-p $recursive_send -i \"$local_ds@$last_snapshot_common\""
+    local recv_args="-F -u"
+    
+    [[ "$use_raw" == "true" ]] && send_args="-w $send_args"
+    [[ "$use_resume" == "true" ]] && recv_args="-s $recv_args"
+
     if [ -z "$dry_run" ]; then
       if [ -n "$remote_shell" ]; then
         set -o pipefail
         # We use a subshell on the remote to capture its stderr and print it to stdout so we can catch it locally
-        timeout "$timeout_val" bash -c "zfs send -w -p $recursive_send -i \"$local_ds@$last_snapshot_common\" \"$latest_snapshot_source\" 2>>/tmp/zfs-replication.err | mbuffer -q -r \"$RATE\" -m \"$BUF\" 2>>/tmp/zfs-replication.err | zstd 2>>/tmp/zfs-replication.err | $remote_shell \"zstd -d | zfs recv $resume -F -u $remote_ds\" 2>>/tmp/zfs-replication.err"
+        timeout "$timeout_val" bash -c "zfs send $send_args \"$latest_snapshot_source\" 2>>/tmp/zfs-replication.err | mbuffer -q -r \"$RATE\" -m \"$BUF\" 2>>/tmp/zfs-replication.err | zstd 2>>/tmp/zfs-replication.err | $remote_shell \"zstd -d | zfs recv $recv_args $remote_ds\" 2>>/tmp/zfs-replication.err"
         local status=$?
         set +o pipefail
         if [[ $status -ne 0 ]]; then
@@ -199,7 +223,7 @@ zfsbud_core() {
            return 1
         fi
       else
-        ! timeout "$timeout_val" bash -c "zfs send -w -p $recursive_send -i \"$local_ds@$last_snapshot_common\" \"$latest_snapshot_source\" 2>>/tmp/zfs-replication.err | zfs recv $resume -F -u \"$remote_ds\" 2>>/tmp/zfs-replication.err" && return 1
+        ! timeout "$timeout_val" bash -c "zfs send $send_args \"$latest_snapshot_source\" 2>>/tmp/zfs-replication.err | zfs recv $recv_args \"$remote_ds\" 2>>/tmp/zfs-replication.err" && return 1
       fi
     fi
   }
@@ -231,9 +255,9 @@ zfsbud_core() {
        # Resume logic simplified
        if [ -z "$dry_run" ]; then
          if [ -n "$remote_shell" ]; then
-           zfs send -w $verbose -t "$resume_token" | mbuffer -q -r "$RATE" -m "$BUF" | zstd | $remote_shell "zstd -d | zfs recv $resume -F -u ${remote_ds}"
+           zfs send $verbose -t "$resume_token" | mbuffer -q -r "$RATE" -m "$BUF" | zstd | $remote_shell "zstd -d | zfs recv -F -u ${remote_ds}"
          else
-           zfs send -w $verbose -t "$resume_token" | zfs recv $resume -F -u "${remote_ds}"
+           zfs send $verbose -t "$resume_token" | zfs recv -F -u "${remote_ds}"
          fi
        fi
     fi
