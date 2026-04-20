@@ -1,6 +1,6 @@
 #!/bin/bash
 # zeplicator-standalone.sh - Compiled ZFS Replication Manager
-# Built on: Sun Apr 19 08:57:09 PM CEST 2026
+# Built on: Mon Apr 20 09:51:11 AM CEST 2026
 
 # --- BEGIN zfs-common.lib.sh ---
 
@@ -611,12 +611,15 @@ zfsbud_core() {
           continue
        fi
     else
-       # RESOLVE DIVERGENCE: Rollback receiver to the common snapshot
-       zbud_msg "Rolling back $remote_ds to $last_snapshot_common to resolve divergence..."
-       if [ -n "$remote_shell" ]; then
-         $remote_shell "zfs rollback -r $remote_ds@$last_snapshot_common" || return 1
-       else
-         zfs rollback -r "$remote_ds@$last_snapshot_common" || return 1
+       # RESOLVE DIVERGENCE: Rollback receiver to the common snapshot ONLY if there are newer snapshots
+       local latest_dest_snap=$(echo "${destination_snapshots[-1]}" | awk '{print $1}')
+       if [[ "$latest_dest_snap" != *"$last_snapshot_common" ]]; then
+           zbud_msg "Divergence detected. Rolling back $remote_ds to $last_snapshot_common..."
+           if [ -n "$remote_shell" ]; then
+             $remote_shell "zfs rollback -r $remote_ds@$last_snapshot_common" || return 1
+           else
+             zfs rollback -r "$remote_ds@$last_snapshot_common" || return 1
+           fi
        fi
        send_incremental "$remote_ds" || return 1
     fi
@@ -1031,7 +1034,6 @@ else
         echo "INFO: Donor run complete."
     else
         echo "INFO: End of chain ($ME). Reporting state."
-        /usr/sbin/zfs-auto-snapshot --syslog --label=$label --keep=$RESOLVED_KEEP "$local_ds"
         
         echo "Sink node marking snapshots ($local_ds) as shipped..."
         zfs list -t snap -o name -H -r "$local_ds" | grep "@.*$label" | \
