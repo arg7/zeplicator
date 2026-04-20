@@ -67,6 +67,19 @@ resolve_node_pool() {
     echo "$pool"
 }
 
+resolve_node_dataset() {
+    local alias=$1
+    local ds_raw=$2
+    local pool=$(resolve_node_pool "$alias" "$ds_raw")
+    local ds_name="${ds_raw#*/}"
+    
+    if [[ "$pool" == *"/"* ]]; then
+        echo "$pool"
+    else
+        echo "${pool}/${ds_name}"
+    fi
+}
+
 get_repl_props_encoded() {
     local ds=$1
     # Get all repl: properties, format as key=value, semicolon separated, then base64

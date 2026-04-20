@@ -1,6 +1,6 @@
 #!/bin/bash
 # zeplicator-standalone.sh - Compiled ZFS Replication Manager
-# Built on: Mon Apr 20 10:56:54 AM CEST 2026
+# Built on: Mon Apr 20 11:12:30 AM CEST 2026
 
 # --- BEGIN zfs-common.lib.sh ---
 
@@ -69,6 +69,19 @@ resolve_node_pool() {
         [[ -z "$pool" ]] && pool="${alias}-pool"
     fi
     echo "$pool"
+}
+
+resolve_node_dataset() {
+    local alias=$1
+    local ds_raw=$2
+    local pool=$(resolve_node_pool "$alias" "$ds_raw")
+    local ds_name="${ds_raw#*/}"
+    
+    if [[ "$pool" == *"/"* ]]; then
+        echo "$pool"
+    else
+        echo "${pool}/${ds_name}"
+    fi
 }
 
 get_repl_props_encoded() {
@@ -772,11 +785,10 @@ if [[ "$PROMOTE" == true ]]; then
             
             declare -A snap_guids
             for n in "${NEW_NODES[@]}"; do
-                echo "  Querying $n for GUID of $TARGET_SNAP..."
-                local_pool=$(resolve_node_pool "$n" "$raw_dataset")
+                local_ds_target=$(resolve_node_dataset "$n" "$raw_dataset")
                 local_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
                 local_user=$(resolve_node_user "$n" "$raw_dataset")
-                g=$(ssh "${local_user}@${local_fqdn}" "zfs get -H -o value guid ${local_pool}/${ds_name}@$TARGET_SNAP" 2>/dev/null)
+                g=$(ssh "${local_user}@${local_fqdn}" "zfs get -H -o value guid ${local_ds_target}@$TARGET_SNAP" 2>/dev/null)
                 if [[ -z "$g" || "$g" == "-" ]]; then
                     die "ERR: Snapshot @$TARGET_SNAP not found on $n"
                 fi
@@ -798,17 +810,17 @@ if [[ "$PROMOTE" == true ]]; then
             
             for n in "${NEW_NODES[@]}"; do
                 echo "  Querying $n..."
-                local_pool=$(resolve_node_pool "$n" "$raw_dataset")
+                local_ds_target=$(resolve_node_dataset "$n" "$raw_dataset")
                 local_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
                 local_user=$(resolve_node_user "$n" "$raw_dataset")
                 node_target="${local_user}@${local_fqdn}"
 
                 if [[ "$f_node_flag" == true ]]; then
-                    ssh "$node_target" "zfs list -t snap -H -o name,guid -r ${local_pool}/${ds_name}" 2>/dev/null | awk '{print $1" "$2}' | cut -d'@' -f2 > "$tmp_common"
+                    ssh "$node_target" "zfs list -t snap -H -o name,guid -r ${local_ds_target}" 2>/dev/null | awk '{print $1" "$2}' | cut -d'@' -f2 > "$tmp_common"
                     f_node_flag=false
                 else
                     node_tmp="/tmp/zfs-node-snaps.$$"
-                    ssh "$node_target" "zfs list -t snap -H -o name,guid -r ${local_pool}/${ds_name}" 2>/dev/null | awk '{print $1" "$2}' | cut -d'@' -f2 > "$node_tmp"
+                    ssh "$node_target" "zfs list -t snap -H -o name,guid -r ${local_ds_target}" 2>/dev/null | awk '{print $1" "$2}' | cut -d'@' -f2 > "$node_tmp"
                     grep -Fxf "$tmp_common" "$node_tmp" > "${tmp_common}.new"
                     mv "${tmp_common}.new" "$tmp_common"
                     rm -f "$node_tmp"
@@ -842,11 +854,10 @@ if [[ "$PROMOTE" == true ]]; then
             fi
 
             for n in "${NEW_NODES[@]}"; do
-                echo "Rolling back $n to $TARGET_SNAP..."
-                local_pool=$(resolve_node_pool "$n" "$raw_dataset")
+                local_ds_target=$(resolve_node_dataset "$n" "$raw_dataset")
                 local_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
                 local_user=$(resolve_node_user "$n" "$raw_dataset")
-                ssh "${local_user}@${local_fqdn}" "zfs rollback -r ${local_pool}/${ds_name}@$TARGET_SNAP" || die "ERR: Rollback failed on $n"
+                ssh "${local_user}@${local_fqdn}" "zfs rollback -r ${local_ds_target}@$TARGET_SNAP" || die "ERR: Rollback failed on $n"
             done
             echo "Chain successfully consistent at @$TARGET_SNAP"
         fi
@@ -949,6 +960,8 @@ else
         echo "${CHAIN_PREFIX}  ℹ️  Node $ME is acting as Donor. Skipping snapshot creation."
     elif [[ -n "$TARGET_NODE" ]]; then
         echo "${CHAIN_PREFIX}  ℹ️  Point-to-point transfer to $TARGET_NODE. Skipping snapshot creation."
+    elif [[ "$PROMOTE" == true ]]; then
+        echo "${CHAIN_PREFIX}  ℹ️  Promoting chain. Skipping initial snapshot creation."
     else
         echo "${CHAIN_PREFIX}  ℹ️  Not a master host ($ME), skipping snapshot creation."
     fi
