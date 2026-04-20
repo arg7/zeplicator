@@ -116,26 +116,3 @@ while true; do date >> /node1-pool/data1/test.txt; sleep 1; done
 *   **The Problem:** Since Docker containers share the host kernel, every container could "see" all three ZFS pools in `zpool list`. The script's original snapshot discovery used global `grep` commands, causing `node1` to accidentally find and attempt to process snapshots belonging to `node2`.
 *   **The Fix:** Updated all discovery logic to use explicit recursive scoping (`zfs list -r <dataset>`) to ensure nodes only see their own intended data.
 
-### B. Bash "local" Syntax Errors
-*   **The Problem:** The script used the `local` keyword for variable declarations in the main execution body (global scope). This is illegal in Bash and caused variable assignments to fail or scripts to crash.
-*   **The Fix:** Stripped `local` from the main orchestrator flow and ensured it is only used inside function definitions.
-
-### C. False-Positive GUID Matching
-*   **The Problem:** When a downstream node had an empty dataset, the GUID check compared two empty strings (or two `-` characters). Bash evaluated `"" == ""` as true, leading the script to believe a common snapshot existed and attempt a rollback/incremental send to a non-existent target.
-*   **The Fix:** Implemented a sanity check to explicitly ignore empty or null GUIDs during the comparison loop.
-
-### D. Recursive Path Appending
-*   **The Problem:** The script originally forced a "parent/child" relationship by appending the source leaf name to the target pool (e.g., `target-pool/source-data`).
-*   **The Fix:** Modified logic to treat `repl:node:<alias>:fs` as a **full literal path** if it contains a `/`, allowing for heterogeneous dataset naming across the chain.
-
-### E. Restrictive PATH Environment
-*   **The Problem:** The inherited `zfsbud` logic reset `PATH` to a minimal set (`/usr/bin:/sbin:/bin`), which broke standard utilities like `date`, `grep`, and `readlink` inside the Ubuntu containers.
-*   **The Fix:** Expanded `zbud_PATH` in `zfs-transfer.lib.sh` to include `/usr/local/bin` and `/usr/local/sbin`.
-
----
-
-## 3. Tomorrow's Focus: Resilience Testing
-
-1.  **Divergence Recovery:** Manually creating "rogue" snapshots on downstream nodes to verify the `--promote --auto` healing mechanism.
-2.  **Split-Brain Prevention:** Implementing a "Master Election" check to prevent two nodes from acting as Master simultaneously if the `repl:chain` is updated inconsistently.
-3.  **Promotion Dry-Runs:** Adding a safety flag to show planned rollbacks before they are executed.
