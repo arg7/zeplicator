@@ -32,10 +32,13 @@ IS_DONOR=false
 CONFIG_MODE=false
 config_args=()
 
+CLI_ALIAS=""
+
 # Parse arguments
 positional_args=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --alias) CLI_ALIAS="$2"; shift 2 ;;
         --mark-only) MARK_ONLY=true; shift ;;
         --initial) initial_send=true; shift ;;
         --promote) PROMOTE=true; shift ;;
@@ -73,7 +76,7 @@ if [[ ${#positional_args[@]} -gt 2 ]]; then keep_fallback="${positional_args[2]}
 [[ -n "$raw_dataset" ]] || die "dataset not specified"
 
 # Early local dataset resolution
-my_hostname=$(hostname)
+my_hostname=$(get_local_alias "$raw_dataset" "$CLI_ALIAS")
 
 # Resolve local pool name from node-specific property (e.g., repl:node:node1:fs=node1-pool/data1)
 configured_ds=$(get_zfs_prop "repl:node:${my_hostname}:fs" "$raw_dataset")
@@ -347,7 +350,7 @@ REPL_USER=$(get_zfs_prop "repl:user" "$local_ds")
 [[ -z "$REPL_USER" ]] && REPL_USER="root"
 
 [[ -n "$raw_dataset" ]] || die "dataset not specified"
-ME=$(hostname)
+ME=$(get_local_alias "$local_ds" "$CLI_ALIAS")
 NEXT_HOP=""
 IS_MASTER=false
 ME_INDEX=-1

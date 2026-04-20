@@ -8,6 +8,61 @@ get_zfs_prop() {
     zfs get -H -o value "$prop" "$ds" 2>/dev/null | grep -v "^-$" | head -n 1
 }
 
+# Get the local node alias (using cli override, hostname in chain, fqdn match, or hostname as fallback)
+get_local_alias() {
+    local raw_ds="$1"
+    local cli_alias="$2"
+
+    # 1. Check if CLI alias is provided (Overrides all auto-discovery)
+    if [[ -n "$cli_alias" ]]; then
+        echo "$cli_alias"
+        return 0
+    fi
+
+    local sys_host=$(hostname)
+    
+    # Try to read the chain from the dataset
+    local chain=$(get_zfs_prop "repl:chain" "$raw_ds")
+    
+    if [[ -z "$chain" ]]; then
+        # Cannot read chain, fallback to hostname
+        echo "$sys_host"
+        return 0
+    fi
+
+    IFS=',' read -r -a nodes <<< "$chain"
+
+    # 2. Does hostname directly match an alias in the chain?
+    for n in "${nodes[@]}"; do
+        if [[ "$n" == "$sys_host" ]]; then
+            echo "$sys_host"
+            return 0
+        fi
+    done
+
+    # 3. Does any node's FQDN resolve to one of our local IPs?
+    local local_ips=$(hostname -I 2>/dev/null || ip -4 addr show 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
+    for n in "${nodes[@]}"; do
+        local n_fqdn=$(get_zfs_prop "repl:node:${n}:fqdn" "$raw_ds")
+        if [[ -n "$n_fqdn" && "$n_fqdn" != "-" ]]; then
+            # Direct string match with local IPs
+            if echo "$local_ips" | grep -qw "$n_fqdn"; then
+                echo "$n"
+                return 0
+            fi
+            # DNS Resolution match
+            local resolved_ip=$(getent hosts "$n_fqdn" 2>/dev/null | awk '{print $1}' | head -n 1)
+            if [[ -n "$resolved_ip" ]] && echo "$local_ips" | grep -qw "$resolved_ip"; then
+                echo "$n"
+                return 0
+            fi
+        fi
+    done
+
+    # 4. Fallback to system hostname
+    echo "$sys_host"
+}
+
 # Resolve FQDN/Address for a specific node alias
 resolve_node_fqdn() {
     local alias=$1
@@ -32,7 +87,7 @@ resolve_node_pool() {
     local alias=$1
     local ds_raw=$2
     local pool=""
-    local my_alias=$(hostname) # Assuming hostname matches the alias in the chain
+    local my_alias=$(get_local_alias "$ds_raw" "") # Rely on auto-discovery here if ME is not in scope
     
     # Pre-flight check: Is node reachable?
     if [[ "$alias" != "$my_alias" ]]; then
