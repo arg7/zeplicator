@@ -23,6 +23,42 @@ We simulate a three-node production chain using Docker on a single ZFS-capable h
 Each node uses a uniquely named dataset to test path-mapping robustness:
 *   `node1-pool/data1` -> `node2-pool/data2` -> `node3-pool/data3`
 
+### Step-by-step Setup (Ubuntu Host)
+Run the following commands on your Ubuntu host to replicate this environment:
+
+```bash
+# 1. Install prerequisites
+sudo apt update && sudo apt install -y zfsutils-linux docker.io
+
+# 2. Create sparse images for virtual disks (8GB each)
+truncate -s 8G node1.img
+truncate -s 8G node2.img
+truncate -s 8G node3.img
+
+# 3. Create ZFS pools using the image files
+sudo zpool create node1-pool $(pwd)/node1.img
+sudo zpool create node2-pool $(pwd)/node2.img
+sudo zpool create node3-pool $(pwd)/node3.img
+
+# 4. Create the datasets
+sudo zfs create node1-pool/data1
+sudo zfs create node2-pool/data2
+sudo zfs create node3-pool/data3
+
+# 5. Launch containers and install dependencies
+for i in {1..3}; do
+  docker run -d --name node${i} \
+    --privileged \
+    -v /dev/zfs:/dev/zfs \
+    -v $(pwd):/scripts \
+    ubuntu:22.04 sleep infinity
+  
+  docker exec node${i} apt update
+  docker exec node${i} apt install -y zfsutils-linux openssh-server openssh-client mbuffer zstd curl iproute2
+done
+```
+*Note: You will still need to manually configure SSH inside the containers to establish full mesh passwordless connectivity between `node1`, `node2`, and `node3`, and set the `repl:*` ZFS properties.*
+
 ### Data Load (IO Simulation)
 A background process on `node1` provides constant incremental changes:
 ```bash
