@@ -1,6 +1,6 @@
 #!/bin/bash
 # zeplicator-standalone.sh - Compiled ZFS Replication Manager
-# Built on: Mon Apr 20 09:51:11 AM CEST 2026
+# Built on: Mon Apr 20 10:21:12 AM CEST 2026
 
 # --- BEGIN zfs-common.lib.sh ---
 
@@ -98,11 +98,12 @@ apply_repl_props() {
     done
 }
 
-zbud_msg() { echo "$*" 1>&2; }
-zbud_warn() { zbud_msg "WARNING: $*"; }
+zbud_msg() { echo "    $*" 1>&2; }
+zbud_warn() { zbud_msg "⚠️  WARNING: $*"; }
 
-zbud_die() { 
-    zbud_msg "ERROR: $*"
+die() {
+    zbud_msg "❌ ERROR: $*"
+
     if [[ -n "$dataset" ]]; then
         if type send_smtp_alert >/dev/null 2>&1; then
             send_smtp_alert "ERROR in ZFSBUD: $*"
@@ -246,7 +247,7 @@ send_smtp_alert() {
         touch "$state_file"
         sed -i "/^$msg_hash /d" "$state_file"
         echo "$msg_hash $last_sent $supp_count" >> "$state_file"
-        echo "Alert suppressed (Rate Limit: ${elapsed}s < ${threshold}s). Count: $supp_count"
+        echo "    🔇 Alert suppressed (Rate Limit: ${elapsed}s < ${threshold}s). Count: $supp_count"
         return
     fi
 
@@ -264,7 +265,7 @@ send_smtp_alert() {
         rm -f /tmp/zfs-replication.err
     fi
 
-    echo "Sending alert email to $to..."
+    echo "  📧 Sending alert email to $to..."
     curl -s --url "${proto:-smtps}://${host}:${port:-465}" \
          --user "${user}:${pass}" \
          --mail-from "$from" \
@@ -322,7 +323,7 @@ purge_shipped_snapshots() {
     local lbl=$2
     local k_count=$3
     
-    echo "Performing shipped-aware rotation for $ds (label: $lbl, keep: $k_count)..."
+    echo "  🔄 Performing shipped-aware rotation for $ds (label: $lbl, keep: $k_count)..."
     
     # Get snapshots matching label, sorted by creation date (newest first)
     mapfile -t snaps < <(zfs list -t snap -H -o name,zfs-send:shipped -S creation -r "$ds" | grep "@.*$lbl")
@@ -488,7 +489,7 @@ zfsbud_core() {
         
         if [[ "$source_guid" == "$dest_guid" ]]; then
            last_snapshot_common="${source_snap#*@}"
-           zbud_msg "Found common snapshot by GUID: $last_snapshot_common (GUID: $source_guid)"
+           zbud_msg "  🔍 Found common snapshot by GUID: $last_snapshot_common (GUID: $source_guid)"
            return 0
         fi
       done
@@ -575,7 +576,7 @@ zfsbud_core() {
         remote_ds="${destination_parent_dataset}/${ds_name}"
     fi
     
-    zbud_msg "Processing $local_ds -> ${destination_parent_dataset} (Target: ${remote_ds})"
+    zbud_msg "  📦 Processing $local_ds -> ${destination_parent_dataset} (Target: ${remote_ds})"
     
     set_source_snapshots "$local_ds"
     if ((${#source_snapshots[@]} < 1)); then
@@ -711,7 +712,7 @@ if [[ "$SUSPEND" == true || "$RESUME" == true ]]; then
         VAL="false"
     fi
 
-    echo "${ACTION} replication for $raw_dataset..."
+    echo "  🛡️  ${ACTION} replication for $raw_dataset..."
     
     CURRENT_CHAIN=$(get_zfs_prop "repl:chain" "$local_ds")
     if [[ -z "$CURRENT_CHAIN" ]]; then
@@ -724,7 +725,7 @@ if [[ "$SUSPEND" == true || "$RESUME" == true ]]; then
         n_user=$(resolve_node_user "$n" "$local_ds")
         n_pool=$(resolve_node_pool "$n" "$local_ds")
         
-        echo "  Setting repl:suspend=$VAL on $n ($n_fqdn)..."
+        echo "    ⏳ Setting repl:suspend=$VAL on $n ($n_fqdn)..."
         ssh "${n_user}@${n_fqdn}" "zfs set repl:suspend=$VAL ${n_pool}/${ds_name}" || echo "  Warning: Failed to set property on $n"
     done
     
@@ -734,7 +735,7 @@ fi
 
 # Handle Promotion logic
 if [[ "$PROMOTE" == true ]]; then
-    echo "Promoting $my_hostname to Master..."
+    echo "  🚀 Promoting $my_hostname to Master..."
     
     CURRENT_CHAIN=$(get_zfs_prop "repl:chain" "$local_ds")
     if [[ -z "$CURRENT_CHAIN" ]]; then die "ERR: Cannot promote, no existing repl:chain found on $local_ds"; fi
@@ -862,7 +863,7 @@ REPL_CHAIN=$(get_zfs_prop "repl:chain" "$local_ds")
 REPL_USER=$(get_zfs_prop "repl:user" "$local_ds")
 [[ -z "$REPL_USER" ]] && REPL_USER="root"
 
-echo "Start: $(date); Dataset: $local_ds; Label: $label"
+echo "🏁 Start: $(date); Dataset: $local_ds; Label: $label"
 
 [[ -n "$raw_dataset" ]] || die "dataset not specified"
 ME=$(hostname)
@@ -890,7 +891,7 @@ if [[ -n "$REPL_CHAIN" ]]; then
     [[ $ME_INDEX -eq -1 ]] && die "ERR: Host $ME is not part of the replication chain for $local_ds"
     
     RESOLVED_KEEP=$(resolve_retention "$local_ds" "$label" "$keep_fallback")
-    echo "INFO: Using dynamic retention for $label: $RESOLVED_KEEP (Role: $( [[ $ME_INDEX -eq 0 ]] && echo "master" || ( [[ $ME_INDEX -eq $((${#nodes[@]}-1)) ]] && echo "sink" || echo "middle" ) ))"
+    echo "  🛡️  Using dynamic retention for $label: $RESOLVED_KEEP (Role: $( [[ $ME_INDEX -eq 0 ]] && echo "master" || ( [[ $ME_INDEX -eq $((${#nodes[@]}-1)) ]] && echo "sink" || echo "middle" ) ))"
 fi
 
 if [[ -n "$TARGET_NODE" ]]; then
@@ -899,17 +900,18 @@ if [[ -n "$TARGET_NODE" ]]; then
 fi
 
 if [[ "$IS_MASTER" == false && "$CASCADED" == false && "$PROMOTE" == false && "$MARK_ONLY" == false && -z "$TARGET_NODE" && "$IS_DONOR" == false ]]; then
-    echo "INFO: Node $ME is not Master. Skipping initiation (Cron safety)."
+    echo "  ℹ️  Node $ME is not Master. Skipping initiation (Cron safety)."
     exit 0
 fi
 
-if [[ "$IS_MASTER" == true && "$CASCADED" == false && "$PROMOTE" == false && "$MARK_ONLY" == false && -z "$TARGET_NODE" ]]; then
+if [[ "$IS_MASTER" == true && "$CASCADED" == false && "$PROMOTE" == false && -z "$TARGET_NODE" ]]; then
     SUSPEND_STATE=$(get_zfs_prop "repl:suspend" "$local_ds")
     if [[ "$SUSPEND_STATE" == "true" ]]; then
-        echo "INFO: Replication is SUSPENDED (repl:suspend=true). Skipping run."
+        echo "  🛑 Replication is SUSPENDED (repl:suspend=true). Skipping run."
         exit 0
     fi
 fi
+
 
 if [[ "$MARK_ONLY" == true ]]; then
     if [[ "$IS_MASTER" == true ]]; then
@@ -925,16 +927,16 @@ if [[ "$IS_MASTER" == true && "$CASCADED" == false && "$PROMOTE" == false && -z 
     k_flag=$(cat /var/run/keep-$label.txt 2> /dev/null)
     [[ -z "$k_flag" ]] && k_flag=999
     
-    echo "Creating snapshot for $local_ds (label: $label)..."
+    echo "  ⏳ Creating snapshot for $local_ds (label: $label)..."
     /usr/sbin/zfs-auto-snapshot --syslog --label=$label --keep=$k_flag "$local_ds"
     [[ $? -eq 0 ]] || die "ERR: snapshot creation failed"
 else
     if [[ "$IS_DONOR" == true ]]; then
-        echo "INFO: Node $ME is acting as Donor. Skipping snapshot creation."
+        echo "  ℹ️  Node $ME is acting as Donor. Skipping snapshot creation."
     elif [[ -n "$TARGET_NODE" ]]; then
-        echo "INFO: Point-to-point transfer to $TARGET_NODE. Skipping snapshot creation."
+        echo "  ℹ️  Point-to-point transfer to $TARGET_NODE. Skipping snapshot creation."
     else
-        echo "INFO: Not a master host ($ME), skipping snapshot creation."
+        echo "  ℹ️  Not a master host ($ME), skipping snapshot creation."
     fi
 fi
 
@@ -947,20 +949,20 @@ for hop_node in "${NODES_REMAINING[@]}"; do
     hop_user=$(resolve_node_user "$hop_node" "$raw_dataset")
     HOP_TARGET="${hop_user}@${hop_fqdn}"
     
-    echo "Checking connectivity to $hop_node ($hop_fqdn)..."
+    echo "  🔍 Checking connectivity to $hop_node ($hop_fqdn)..."
     NEXT_HOP_POOL=$(resolve_node_pool "$hop_node" "$raw_dataset")
     if [[ $? -eq 255 ]]; then
-        echo "ERROR: Node $hop_node is unreachable (Pre-flight). Skipping..."
+        echo "  ❌ ERROR: Node $hop_node is unreachable (Pre-flight). Skipping..."
         continue
     fi
     
-    echo "Attempting replication: $local_ds -> $HOP_TARGET (Pool: $NEXT_HOP_POOL)..."
+    echo "  🚀 Attempting replication: $local_ds -> $HOP_TARGET (Pool: $NEXT_HOP_POOL)..."
     zfsbud_opts=""
     if [[ "$initial_send" == true ]]; then zfsbud_opts="-i"; fi
     
     TRANSFER_DONE=false
     if zfsbud_core $zfsbud_opts -s "$NEXT_HOP_POOL" -e "ssh $HOP_TARGET" -v "$local_ds"; then
-        echo "Replication to $HOP_TARGET successful."
+        echo "  ✅ Replication to $HOP_TARGET successful."
         TRANSFER_DONE=true
     else
         echo "WARNING: Local replication to $hop_node failed. Searching chain for a better donor..."
@@ -970,9 +972,9 @@ for hop_node in "${NODES_REMAINING[@]}"; do
             donor_user=$(resolve_node_user "$DONOR_NODE" "$raw_dataset")
             donor_target="${donor_user}@${donor_fqdn}"
 
-            echo "SUCCESS: Found donor peer '$DONOR_NODE' ($donor_fqdn). Delegating healing of '$hop_node'..."
+            echo "  ✅ SUCCESS: Found donor peer '$DONOR_NODE' ($donor_fqdn). Delegating healing of '$hop_node'..."
             if ssh "$donor_target" "/scripts/zeplicator $raw_dataset $label $keep_fallback --target $hop_node --donor"; then
-                echo "Delegated replication from $DONOR_NODE to $hop_node successful."
+                echo "  ✅ Delegated replication from $DONOR_NODE to $hop_node successful."
                 TRANSFER_DONE=true
             else
                 echo "ERROR: Delegated replication from $DONOR_NODE failed."
@@ -989,7 +991,7 @@ for hop_node in "${NODES_REMAINING[@]}"; do
             send_smtp_alert "SUCCESS: Initial replication of $local_ds completed successfully to $hop_node ($HOP_TARGET)."
         fi
         
-        echo "Cascading: triggering downstream chain for $local_ds on $HOP_TARGET"
+        echo "  🔗 Cascading: triggering downstream chain for $local_ds on $HOP_TARGET"
         casc_opts=""
         if [[ "$initial_send" == true ]]; then casc_opts="--initial"; fi
         PROPS_ARG=$(get_repl_props_encoded "$local_ds")
@@ -1003,9 +1005,9 @@ for hop_node in "${NODES_REMAINING[@]}"; do
             ARRIVED_LIST=$(echo "$DOWNSTREAM_OUT" | grep "^SENT_LIST:" | cut -d':' -f2)
             
             if [[ -n "$LATEST_SNAP" && ",$ARRIVED_LIST," == *",$LATEST_SNAP,"* ]]; then
-                echo "VERIFICATION SUCCESS: Snapshot $LATEST_SNAP confirmed reaching a sink node."
+                echo "  ✅ VERIFICATION SUCCESS: Snapshot $LATEST_SNAP confirmed reaching a sink node."
             else
-                echo "WARNING: Verification FAILED. Snapshot $LATEST_SNAP not confirmed at end of chain, but transfer to $hop_node succeeded."
+                echo "  ⚠️  WARNING: Verification FAILED. Snapshot $LATEST_SNAP not confirmed at end of chain, but transfer to $hop_node succeeded."
             fi
         else
             echo "WARNING: Downstream cascade from $hop_node failed (Code: $SSH_STATUS)."
@@ -1017,25 +1019,28 @@ for hop_node in "${NODES_REMAINING[@]}"; do
 done
 
 if [[ "$REPLICATION_SUCCESS" == true ]]; then
-    echo "Marking local snapshots ($local_ds) as shipped..."
+    echo "  🏷️  Marking local snapshots ($local_ds) as shipped..."
     zfs list -t snap -o name -H -r "$local_ds" | grep "@.*$label" | \
     while read s; do
         zfs set zfs-send:shipped=true "$s"
     done
     purge_shipped_snapshots "$local_ds" "$label" "$RESOLVED_KEEP"
     
-    MY_LIST=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*$label" | cut -d'@' -f2 | xargs | tr ' ' ',')
-    echo "SENT_LIST:$MY_LIST"
+    # Internal state reporting for upstream verification (only needed if NOT the initiating Master)
+    if [[ "$IS_MASTER" == false || "$CASCADED" == true ]]; then
+        MY_LIST=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*$label" | cut -d'@' -f2 | xargs | tr ' ' ',')
+        echo "SENT_LIST:$MY_LIST"
+    fi
 elif [[ ${#NODES_REMAINING[@]} -gt 0 ]]; then
     echo 9999 > /var/run/keep-$label.txt
     die "ERR: All downstream replication attempts failed for chain: ${NODES_REMAINING[*]}"
 else
     if [[ "$IS_DONOR" == true ]]; then
-        echo "INFO: Donor run complete."
+        echo "  ℹ️  Donor run complete."
     else
-        echo "INFO: End of chain ($ME). Reporting state."
+        echo "  🏁 End of chain ($ME). Reporting state."
         
-        echo "Sink node marking snapshots ($local_ds) as shipped..."
+        echo "  🏷️  Sink node marking snapshots ($local_ds) as shipped..."
         zfs list -t snap -o name -H -r "$local_ds" | grep "@.*$label" | \
         while read s; do
             zfs set zfs-send:shipped=true "$s"
@@ -1044,9 +1049,10 @@ else
     fi
 
     SINK_LIST=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*$label" | cut -d'@' -f2 | xargs | tr ' ' ',')
+    # Internal state reporting (silenced from user view)
     echo "SENT_LIST:$SINK_LIST"
 fi
 
-echo "Done: $(date)"
+echo "  ✅ Done: $(date)"
 exit 0
 # --- END zeplicator orchestrator ---

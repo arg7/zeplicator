@@ -31,7 +31,7 @@ purge_shipped_snapshots() {
     local lbl=$2
     local k_count=$3
     
-    echo "Performing shipped-aware rotation for $ds (label: $lbl, keep: $k_count)..."
+    echo "  🔄 Performing shipped-aware rotation for $ds (label: $lbl, keep: $k_count)..."
     
     # Get snapshots matching label, sorted by creation date (newest first)
     mapfile -t snaps < <(zfs list -t snap -H -o name,zfs-send:shipped -S creation -r "$ds" | grep "@.*$lbl")

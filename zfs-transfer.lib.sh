@@ -130,7 +130,7 @@ zfsbud_core() {
         
         if [[ "$source_guid" == "$dest_guid" ]]; then
            last_snapshot_common="${source_snap#*@}"
-           zbud_msg "Found common snapshot by GUID: $last_snapshot_common (GUID: $source_guid)"
+           zbud_msg "  🔍 Found common snapshot by GUID: $last_snapshot_common (GUID: $source_guid)"
            return 0
         fi
       done
@@ -217,7 +217,7 @@ zfsbud_core() {
         remote_ds="${destination_parent_dataset}/${ds_name}"
     fi
     
-    zbud_msg "Processing $local_ds -> ${destination_parent_dataset} (Target: ${remote_ds})"
+    zbud_msg "  📦 Processing $local_ds -> ${destination_parent_dataset} (Target: ${remote_ds})"
     
     set_source_snapshots "$local_ds"
     if ((${#source_snapshots[@]} < 1)); then

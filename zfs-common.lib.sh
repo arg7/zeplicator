@@ -94,11 +94,12 @@ apply_repl_props() {
     done
 }
 
-zbud_msg() { echo "$*" 1>&2; }
-zbud_warn() { zbud_msg "WARNING: $*"; }
+zbud_msg() { echo "    $*" 1>&2; }
+zbud_warn() { zbud_msg "⚠️  WARNING: $*"; }
 
-zbud_die() { 
-    zbud_msg "ERROR: $*"
+die() {
+    zbud_msg "❌ ERROR: $*"
+
     if [[ -n "$dataset" ]]; then
         if type send_smtp_alert >/dev/null 2>&1; then
             send_smtp_alert "ERROR in ZFSBUD: $*"

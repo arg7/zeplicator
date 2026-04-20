@@ -44,7 +44,7 @@ send_smtp_alert() {
         touch "$state_file"
         sed -i "/^$msg_hash /d" "$state_file"
         echo "$msg_hash $last_sent $supp_count" >> "$state_file"
-        echo "Alert suppressed (Rate Limit: ${elapsed}s < ${threshold}s). Count: $supp_count"
+        echo "    🔇 Alert suppressed (Rate Limit: ${elapsed}s < ${threshold}s). Count: $supp_count"
         return
     fi
 
@@ -62,7 +62,7 @@ send_smtp_alert() {
         rm -f /tmp/zfs-replication.err
     fi
 
-    echo "Sending alert email to $to..."
+    echo "  📧 Sending alert email to $to..."
     curl -s --url "${proto:-smtps}://${host}:${port:-465}" \
          --user "${user}:${pass}" \
          --mail-from "$from" \
