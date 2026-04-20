@@ -1,6 +1,6 @@
 #!/bin/bash
 # zeplicator-standalone.sh - Compiled ZFS Replication Manager
-# Built on: Mon Apr 20 12:27:57 PM CEST 2026
+# Built on: Mon Apr 20 12:35:11 PM CEST 2026
 
 # --- BEGIN zfs-common.lib.sh ---
 
@@ -659,11 +659,13 @@ zfsbud_core() {
                done
            fi
            
-           local alert_msg="Data was written to $remote_ds after $last_snapshot_common. Replication aborted to prevent data loss.\n\nData Divergence (preview):\n$diff_output"
+           local alert_msg="CRITICAL: Split-Brain Data Divergence on $remote_ds\nData was written to $remote_ds after $last_snapshot_common. Replication aborted to prevent data loss.\n\nData Divergence (preview):\n$diff_output"
            if [[ -n "$offending_snaps" ]]; then
                alert_msg+="\n\nSnapshot Divergence (offending snapshots):$offending_snaps"
            fi
-           send_smtp_alert "CRITICAL: Split-Brain Data Divergence on $remote_ds" "$alert_msg"
+           # Write to error log to ensure it's picked up by send_smtp_alert 'Error Details' block
+           echo -e "$alert_msg" > /tmp/zfs-replication.err
+           send_smtp_alert "CRITICAL: Split-Brain Data Divergence on $remote_ds"
            return 1
        fi
 
