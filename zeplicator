@@ -408,7 +408,6 @@ else
         echo "INFO: Donor run complete."
     else
         echo "INFO: End of chain ($ME). Reporting state."
-        /usr/sbin/zfs-auto-snapshot --syslog --label=$label --keep=$RESOLVED_KEEP "$local_ds"
         
         echo "Sink node marking snapshots ($local_ds) as shipped..."
         zfs list -t snap -o name -H -r "$local_ds" | grep "@.*$label" | \

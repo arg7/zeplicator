@@ -253,12 +253,15 @@ zfsbud_core() {
           continue
        fi
     else
-       # RESOLVE DIVERGENCE: Rollback receiver to the common snapshot
-       zbud_msg "Rolling back $remote_ds to $last_snapshot_common to resolve divergence..."
-       if [ -n "$remote_shell" ]; then
-         $remote_shell "zfs rollback -r $remote_ds@$last_snapshot_common" || return 1
-       else
-         zfs rollback -r "$remote_ds@$last_snapshot_common" || return 1
+       # RESOLVE DIVERGENCE: Rollback receiver to the common snapshot ONLY if there are newer snapshots
+       local latest_dest_snap=$(echo "${destination_snapshots[-1]}" | awk '{print $1}')
+       if [[ "$latest_dest_snap" != *"$last_snapshot_common" ]]; then
+           zbud_msg "Divergence detected. Rolling back $remote_ds to $last_snapshot_common..."
+           if [ -n "$remote_shell" ]; then
+             $remote_shell "zfs rollback -r $remote_ds@$last_snapshot_common" || return 1
+           else
+             zfs rollback -r "$remote_ds@$last_snapshot_common" || return 1
+           fi
        fi
        send_incremental "$remote_ds" || return 1
     fi
