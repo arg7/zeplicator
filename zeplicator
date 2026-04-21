@@ -49,6 +49,17 @@ Advanced Flags:
   -y                Assume 'yes' for destructive operations (promotion/rollback).
   --help, -h        Show this help message.
 
+Configuration Mode (--config):
+  $(basename "$0") <dataset> --config [subcommand]
+
+  --list            (Default) List all 'repl:' properties.
+  --clear <key>     Remove a specific property (e.g., smtp:port).
+  --export <file>   Save all 'repl:' properties to a file.
+  --import <file>   Load 'repl:' properties from a file.
+  key=value         Set a property. Supports shorthands:
+                    'smtp:host=...' expands to 'repl:smtp_host=...'
+                    'node:n1:fqdn=...' expands to 'repl:node:n1:fqdn=...'
+
 Configuration Examples:
   Set chain:      zfs set repl:chain=node1,node2,node3 tank/data
   Set retention:  zfs set repl:node:node1:keep:frequently=30 tank/data
