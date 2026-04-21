@@ -46,6 +46,25 @@ resolve_retention() {
     # Get snapshots matching label, sorted by creation date (newest first)
     mapfile -t snaps < <(zfs list -t snap -H -o name,zfs-send:shipped -S creation -r "$ds" | grep "@.*$lbl")
     
+    if [[ "$DRY_RUN" == true ]]; then
+        # Inject virtual snapshots to simulate accurate count
+        local v_count=0
+        if [[ -n "$VIRTUAL_SNAP_CREATED" && "$VIRTUAL_SNAP_CREATED" == *"$lbl"* ]]; then
+            # Prepend local virtual snap (it is the newest)
+            snaps=("${ds}@${VIRTUAL_SNAP_CREATED} zfs-send:shipped=true" "${snaps[@]}")
+        fi
+        
+        if [[ -n "$VIRTUAL_SNAPS_INCOMING" ]]; then
+            IFS=',' read -ra v_incoming <<< "$VIRTUAL_SNAPS_INCOMING"
+            for v in "${v_incoming[@]}"; do
+                if [[ "$v" == *"$lbl"* ]]; then
+                   # These are also "new" from upstream
+                   snaps=("${ds}@${v} zfs-send:shipped=true" "${snaps[@]}")
+                fi
+            done
+        fi
+    fi
+
     local count=${#snaps[@]}
     if [[ $count -le $k_count ]]; then
         echo "${CHAIN_PREFIX}  ✅ Snapshot count ($count) is within limit ($k_count). Skipping purge."
