@@ -1,6 +1,6 @@
 #!/bin/bash
 # zeplicator-standalone.sh - Compiled ZFS Replication Manager
-# Built on: Tue Apr 21 03:23:53 PM CEST 2026
+# Built on: Tue Apr 21 03:28:55 PM CEST 2026
 
 # --- BEGIN zfs-common.lib.sh ---
 
@@ -627,12 +627,14 @@ zfsbud_core() {
     # Configure flags based on properties
     local use_raw=$(get_zfs_prop "repl:zfs:raw" "$dataset")
     local use_resume=$(get_zfs_prop "repl:zfs:resume" "$dataset")
+    local use_force=$(get_zfs_prop "repl:zfs:force" "$dataset")
     
     local send_args="-R"
-    local recv_args="-F -u"
+    local recv_args="-u"
     
     [[ "$use_raw" == "true" ]] && send_args="-w $send_args"
     [[ "$use_resume" == "true" ]] && recv_args="-s $recv_args"
+    [[ "$use_force" != "false" ]] && recv_args="-F $recv_args"
 
     if [ -z "$dry_run" ]; then
       # FORCE CLEANUP of destination ONLY if --destroy-chain is set
@@ -673,12 +675,14 @@ zfsbud_core() {
     # Configure flags based on properties
     local use_raw=$(get_zfs_prop "repl:zfs:raw" "$dataset")
     local use_resume=$(get_zfs_prop "repl:zfs:resume" "$dataset")
+    local use_force=$(get_zfs_prop "repl:zfs:force" "$dataset")
     
     local send_args="-p $recursive_send -i \"$local_ds@$last_snapshot_common\""
-    local recv_args="-F -u"
+    local recv_args="-u"
     
     [[ "$use_raw" == "true" ]] && send_args="-w $send_args"
     [[ "$use_resume" == "true" ]] && recv_args="-s $recv_args"
+    [[ "$use_force" != "false" ]] && recv_args="-F $recv_args"
 
     if [ -z "$dry_run" ]; then
       if [ -n "$remote_shell" ]; then
