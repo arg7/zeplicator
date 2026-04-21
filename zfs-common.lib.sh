@@ -304,38 +304,63 @@ check_stuck_job() {
     trap 'rm -f "$LOCKFILE"' EXIT
 }
 
+# High-performance pipe monitor to track bytes and update lock file
+iomon() {
+    local lock="$1"
+    local interval="$2"
+    perl -e '
+        my ($lock, $int) = @ARGV;
+        my $total = 0;
+        my $last_update = time();
+        $| = 1; # Autoflush STDOUT
+        while (sysread(STDIN, my $buf, 1024*1024)) {
+            my $len = length($buf);
+            my $offset = 0;
+            while ($offset < $len) {
+                my $written = syswrite(STDOUT, $buf, $len - $offset, $offset);
+                die "syswrite failed: $!" unless defined $written;
+                $offset += $written;
+            }
+            $total += $len;
+            my $now = time();
+            if ($now - $last_update >= $int) {
+                if (open(my $fh, "<", $lock)) {
+                    my $content = <$fh>;
+                    close($fh);
+                    if ($content) {
+                        my @p = split(" ", $content);
+                        $p[3] = $total; # Update the size/progress field
+                        if (open(my $wh, ">", $lock)) {
+                            print $wh join(" ", @p) . "\n";
+                            close($wh);
+                        }
+                    }
+                }
+                $last_update = $now;
+            }
+        }
+    ' "$lock" "$interval"
+}
+
 check_replication_progress() {
     local ds="$1"
     [[ -f "$LOCKFILE" ]] || return 1
     
     # Read lock file: PID [TARGET_NODE] [TARGET_DS] [LAST_SIZE]
     local lock_data=($(cat "$LOCKFILE" 2>/dev/null))
-    local pid="${lock_data[0]}"
-    local target_node="${lock_data[1]}"
-    local target_ds="${lock_data[2]}"
     local last_size="${lock_data[3]:-0}"
 
-    [[ -z "$target_node" || -z "$target_ds" ]] && return 1
-
-    local fqdn=$(resolve_node_fqdn "$target_node" "$ds")
-    local user=$(resolve_node_user "$target_node" "$ds")
-    local ssh_t=$(resolve_ssh_timeout "$ds")
-
-    # Check for %recv dataset size on target
-    local current_size=$(ssh -o ConnectTimeout="$ssh_t" "${user}@${fqdn}" "zfs list -H -o used \"${target_ds}/%recv\" 2>/dev/null | grep -E '^[0-9]+' || echo 0")
+    # Wait a bit to see if size increases (since cron runs are usually 1 min apart, 
+    # we can just compare against the last recorded size from the previous run)
+    # The 'iomon' updates the lock file every 10s.
     
-    # If %recv doesn't exist (it returns 0), it might have just finished or not started
-    if [[ "$current_size" == "0" ]]; then
-        return 1 
-    fi
+    sleep 2
+    local current_data=($(cat "$LOCKFILE" 2>/dev/null))
+    local current_size="${current_data[3]:-0}"
 
-    # If size has increased, it's making progress
     if [[ "$current_size" -gt "$last_size" ]]; then
-        # Update lock file with new size and current timestamp (via touch)
-        echo "$pid $target_node $target_ds $current_size" > "$LOCKFILE"
-        return 0
+        return 0 # Progress made
     fi
 
-    # No progress since last check
-    return 1
+    return 1 # Stuck
 }
