@@ -1,6 +1,6 @@
 #!/bin/bash
 # zeplicator-standalone.sh - Compiled ZFS Replication Manager
-# Built on: Tue Apr 21 02:25:06 EDT 2026
+# Built on: Tue Apr 21 12:29:14 PM CEST 2026
 
 # --- BEGIN zfs-common.lib.sh ---
 
@@ -210,10 +210,12 @@ die() {
             send_smtp_alert "ERROR: $msg"
         fi
     fi
-    echo "HINT: If replication failed due to divergent snapshots, try recovery options:"
-    echo "  --promote --auto [-y]         (Auto-discover latest common snapshot and rollback chain)"
-    echo "  --promote --snap <name> [-y]  (Rollback chain to specific snapshot)"
-    echo "  --promote --destroy-chain     (DANGER: Destroy downstream datasets and start over)"
+    if [[ "$CASCADED" != true ]]; then
+        echo "HINT: If replication failed due to divergent snapshots, try recovery options:"
+        echo "  --promote --auto [-y]         (Auto-discover latest common snapshot and rollback chain)"
+        echo "  --promote --snap <name> [-y]  (Rollback chain to specific snapshot)"
+        echo "  --promote --destroy-chain     (DANGER: Destroy downstream datasets and start over)"
+    fi
     exit $exit_code
 }
 
@@ -835,6 +837,7 @@ CASCADED=false
 SUSPEND=false
 RESUME=false
 AUTO=false
+DRY_RUN=false
 DESTROY_CHAIN=false
 YES=false
 PROMOTE_SNAP=""
@@ -1059,6 +1062,7 @@ if [[ "$PROMOTE" == true ]]; then
         ME_INDEX=0
     else
         echo "  $my_hostname is already Master in local config."
+        exit 0
     fi
 
     if [[ "$AUTO" == true || -n "$PROMOTE_SNAP" || "$DESTROY_CHAIN" == true ]]; then
@@ -1144,7 +1148,33 @@ if [[ "$PROMOTE" == true ]]; then
                 ssh "${local_user}@${local_fqdn}" "zfs rollback -r ${local_ds_target}@$TARGET_SNAP" || die "ERR: Rollback failed on $n"
             done
             echo "Chain successfully consistent at @$TARGET_SNAP"
+            
+            # Sync properties to all nodes in the new chain and exit
+            echo "  Syncing replication properties across the chain..."
+            PROPS_DATA=$(get_repl_props_encoded "$local_ds")
+            for n in "${NEW_NODES[@]}"; do
+                [[ "$n" == "$my_hostname" ]] && continue
+                n_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
+                n_user=$(resolve_node_user "$n" "$raw_dataset")
+                echo "    Syncing properties to $n ($n_fqdn)..."
+                ssh "${n_user}@${n_fqdn}" "$ZEPLICATOR_CMD $raw_dataset $label $keep_fallback --sync-props $PROPS_DATA --mark-only --alias $n" || echo "  Warning: Prop sync failed on $n"
+            done
+            exit 0
         fi
+    fi
+    # If we are here and PROMOTE=true, it means no auto/snap/rollback was requested,
+    # but we should still sync the new chain configuration and exit.
+    if [[ "$PROMOTE" == true ]]; then
+        echo "  Syncing replication properties across the chain..."
+        PROPS_DATA=$(get_repl_props_encoded "$local_ds")
+        for n in "${NEW_NODES[@]}"; do
+            [[ "$n" == "$my_hostname" ]] && continue
+            n_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
+            n_user=$(resolve_node_user "$n" "$raw_dataset")
+            echo "    Syncing properties to $n ($n_fqdn)..."
+            ssh "${n_user}@${n_fqdn}" "$ZEPLICATOR_CMD $raw_dataset $label $keep_fallback --sync-props $PROPS_DATA --mark-only --alias $n" || echo "  Warning: Prop sync failed on $n"
+        done
+        exit 0
     fi
 fi 
 
@@ -1279,6 +1309,7 @@ fi
 LATEST_SNAP=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*$label" | head -n 1 | cut -d'@' -f2)
 
 # 2. Replication & Audit
+# 2. Replication & Audit
 REPLICATION_SUCCESS=false
 HAD_SPLIT_BRAIN=false
 hop_idx=0
@@ -1388,14 +1419,19 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
                 if [[ "$REPL_POLICY" == "resilience" ]]; then
                     echo "${CHAIN_PREFIX}  ⚠️  WARNING: Split-Brain detected downstream from $hop_node. Skipping affected downstream nodes due to policy=resilience..."
                     # SKIP all nodes that were supposed to be handled by this hop
+                    # In a linear chain, these are all remaining nodes in the REPL_CHAIN after hop_node
+                    # But we only skip nodes that are already in OUR NODES_REMAINING list.
+                    # Since NODES_REMAINING is sorted, we just skip until the end of the chain.
+                    # If we had branching, we'd need more complex logic.
                     break 
                 else
                     die "🚨 FATAL: Split-Brain detected downstream from $hop_node. Aborting entire replication job." 2
                 fi
             fi
-            
+
             echo "$DOWNSTREAM_OUT" | grep -v "^SENT_LIST:"
-            
+
+            CASCADE_VERIFIED=false
             if [[ $SSH_STATUS -eq 0 ]]; then
                 ARRIVED_LIST=$(echo "$DOWNSTREAM_OUT" | grep "^SENT_LIST:" | cut -d':' -f2)
                 
@@ -1437,7 +1473,12 @@ if [[ "$REPLICATION_SUCCESS" == true ]]; then
     
     # Internal state reporting for upstream verification (only needed if NOT the initiating Master)
     if [[ "$IS_MASTER" == false || "$CASCADED" == true ]]; then
-        MY_LIST=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*$label" | cut -d'@' -f2 | xargs | tr ' ' ',')
+        if [[ "$PROMOTE" == true || "$CASCADED" == true ]]; then
+            # During promotion or cascade, we might be verifying non-labeled snapshots
+            MY_LIST=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | cut -d'@' -f2 | xargs | tr ' ' ',')
+        else
+            MY_LIST=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*$label" | cut -d'@' -f2 | xargs | tr ' ' ',')
+        fi
         echo "SENT_LIST:$MY_LIST"
     fi
 elif [[ ${#NODES_REMAINING[@]} -gt 0 ]]; then

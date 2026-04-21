@@ -249,6 +249,7 @@ if [[ "$PROMOTE" == true ]]; then
         ME_INDEX=0
     else
         echo "  $my_hostname is already Master in local config."
+        exit 0
     fi
 
     if [[ "$AUTO" == true || -n "$PROMOTE_SNAP" || "$DESTROY_CHAIN" == true ]]; then
@@ -334,7 +335,33 @@ if [[ "$PROMOTE" == true ]]; then
                 ssh "${local_user}@${local_fqdn}" "zfs rollback -r ${local_ds_target}@$TARGET_SNAP" || die "ERR: Rollback failed on $n"
             done
             echo "Chain successfully consistent at @$TARGET_SNAP"
+            
+            # Sync properties to all nodes in the new chain and exit
+            echo "  Syncing replication properties across the chain..."
+            PROPS_DATA=$(get_repl_props_encoded "$local_ds")
+            for n in "${NEW_NODES[@]}"; do
+                [[ "$n" == "$my_hostname" ]] && continue
+                n_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
+                n_user=$(resolve_node_user "$n" "$raw_dataset")
+                echo "    Syncing properties to $n ($n_fqdn)..."
+                ssh "${n_user}@${n_fqdn}" "$ZEPLICATOR_CMD $raw_dataset $label $keep_fallback --sync-props $PROPS_DATA --mark-only --alias $n" || echo "  Warning: Prop sync failed on $n"
+            done
+            exit 0
         fi
+    fi
+    # If we are here and PROMOTE=true, it means no auto/snap/rollback was requested,
+    # but we should still sync the new chain configuration and exit.
+    if [[ "$PROMOTE" == true ]]; then
+        echo "  Syncing replication properties across the chain..."
+        PROPS_DATA=$(get_repl_props_encoded "$local_ds")
+        for n in "${NEW_NODES[@]}"; do
+            [[ "$n" == "$my_hostname" ]] && continue
+            n_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
+            n_user=$(resolve_node_user "$n" "$raw_dataset")
+            echo "    Syncing properties to $n ($n_fqdn)..."
+            ssh "${n_user}@${n_fqdn}" "$ZEPLICATOR_CMD $raw_dataset $label $keep_fallback --sync-props $PROPS_DATA --mark-only --alias $n" || echo "  Warning: Prop sync failed on $n"
+        done
+        exit 0
     fi
 fi 
 
@@ -633,7 +660,12 @@ if [[ "$REPLICATION_SUCCESS" == true ]]; then
     
     # Internal state reporting for upstream verification (only needed if NOT the initiating Master)
     if [[ "$IS_MASTER" == false || "$CASCADED" == true ]]; then
-        MY_LIST=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*$label" | cut -d'@' -f2 | xargs | tr ' ' ',')
+        if [[ "$PROMOTE" == true || "$CASCADED" == true ]]; then
+            # During promotion or cascade, we might be verifying non-labeled snapshots
+            MY_LIST=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | cut -d'@' -f2 | xargs | tr ' ' ',')
+        else
+            MY_LIST=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*$label" | cut -d'@' -f2 | xargs | tr ' ' ',')
+        fi
         echo "SENT_LIST:$MY_LIST"
     fi
 elif [[ ${#NODES_REMAINING[@]} -gt 0 ]]; then
