@@ -157,8 +157,8 @@ resolve_node_dataset() {
 
 get_repl_props_encoded() {
     local ds=$1
-    # Get all repl: properties, format as key=value, semicolon separated, then base64
-    local props=$(zfs get all -H -o property,value "$ds" | grep "^repl:" | awk '{print $1"="$2}' | tr '\n' ';')
+    # Get all repl: properties, filter out node-specific ones like alias and suspend
+    local props=$(zfs get all -H -o property,value "$ds" | grep "^repl:" | grep -vE "repl:(alias|suspend)" | awk '{print $1"="$2}' | tr '\n' ';')
     echo -n "$props" | base64 -w 0
 }
 

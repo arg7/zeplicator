@@ -1,6 +1,6 @@
 #!/bin/bash
 # zeplicator-standalone.sh - Compiled ZFS Replication Manager
-# Built on: Tue Apr 21 02:18:32 PM CEST 2026
+# Built on: Tue Apr 21 02:29:17 PM CEST 2026
 
 # --- BEGIN zfs-common.lib.sh ---
 
@@ -161,8 +161,8 @@ resolve_node_dataset() {
 
 get_repl_props_encoded() {
     local ds=$1
-    # Get all repl: properties, format as key=value, semicolon separated, then base64
-    local props=$(zfs get all -H -o property,value "$ds" | grep "^repl:" | awk '{print $1"="$2}' | tr '\n' ';')
+    # Get all repl: properties, filter out node-specific ones like alias and suspend
+    local props=$(zfs get all -H -o property,value "$ds" | grep "^repl:" | grep -vE "repl:(alias|suspend)" | awk '{print $1"="$2}' | tr '\n' ';')
     echo -n "$props" | base64 -w 0
 }
 
@@ -1182,13 +1182,30 @@ if [[ "$PROMOTE" == true ]]; then
 
             # Sync properties to all nodes in the new chain and exit
             echo "  Syncing replication properties across the chain..."
-            PROPS_DATA=$(get_repl_props_encoded "$local_ds")
+            PROPS_ENCODED=$(get_repl_props_encoded "$local_ds")
+            PROPS_DECODED=$(echo -n "$PROPS_ENCODED" | base64 -d)
             for n in "${NEW_NODES[@]}"; do
                 [[ "$n" == "$my_hostname" ]] && continue
                 n_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
                 n_user=$(resolve_node_user "$n" "$raw_dataset")
+                n_ds=$(resolve_node_dataset "$n" "$raw_dataset")
                 echo "    Syncing properties to $n ($n_fqdn)..."
-                ssh "${n_user}@${n_fqdn}" "export CHAIN_PREFIX=\"      \"; $ZEPLICATOR_CMD $raw_dataset $label $keep_fallback --sync-props $PROPS_DATA --mark-only --alias $n" || echo "  Warning: Prop sync failed on $n"
+                
+                # Send the decoded properties string and a small script to parse and apply it
+                ssh "${n_user}@${n_fqdn}" "bash -s" <<EOF
+                    IFS=';' read -ra props <<< "$PROPS_DECODED"
+                    for p in "\${props[@]}"; do
+                        [[ -z "\$p" ]] && continue
+                        k="\${p%%=*}"
+                        v="\${p#*=}"
+                        curr=\$(zfs get -H -o value "\$k" "$n_ds" 2>/dev/null)
+                        if [[ "\$curr" != "\$v" ]]; then
+                            echo "      Updating \$k -> \$v"
+                            zfs set "\$p" "$n_ds"
+                        fi
+                    done
+EOF
+                if [[ $? -ne 0 ]]; then echo "    Warning: Prop sync failed on $n"; fi
             done
             exit 0
         fi
@@ -1201,13 +1218,29 @@ if [[ "$PROMOTE" == true ]]; then
         send_smtp_alert "NOTICE: Node $my_hostname has been PROMOTED to Master for dataset $raw_dataset. New chain: $NEW_CHAIN"
 
         echo "  Syncing replication properties across the chain..."
-        PROPS_DATA=$(get_repl_props_encoded "$local_ds")
+        PROPS_ENCODED=$(get_repl_props_encoded "$local_ds")
+        PROPS_DECODED=$(echo -n "$PROPS_ENCODED" | base64 -d)
         for n in "${NEW_NODES[@]}"; do
             [[ "$n" == "$my_hostname" ]] && continue
             n_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
             n_user=$(resolve_node_user "$n" "$raw_dataset")
+            n_ds=$(resolve_node_dataset "$n" "$raw_dataset")
             echo "    Syncing properties to $n ($n_fqdn)..."
-            ssh "${n_user}@${n_fqdn}" "export CHAIN_PREFIX=\"      \"; $ZEPLICATOR_CMD $raw_dataset $label $keep_fallback --sync-props $PROPS_DATA --mark-only --alias $n" || echo "  Warning: Prop sync failed on $n"
+            
+            ssh "${n_user}@${n_fqdn}" "bash -s" <<EOF
+                IFS=';' read -ra props <<< "$PROPS_DECODED"
+                for p in "\${props[@]}"; do
+                    [[ -z "\$p" ]] && continue
+                    k="\${p%%=*}"
+                    v="\${p#*=}"
+                    curr=\$(zfs get -H -o value "\$k" "$n_ds" 2>/dev/null)
+                    if [[ "\$curr" != "\$v" ]]; then
+                        echo "      Updating \$k -> \$v"
+                        zfs set "\$p" "$n_ds"
+                    fi
+                done
+EOF
+            if [[ $? -ne 0 ]]; then echo "    Warning: Prop sync failed on $n"; fi
         done
         exit 0
     fi
