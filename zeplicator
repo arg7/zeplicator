@@ -360,6 +360,22 @@ CHAIN_PREFIX=""
 
 if [[ -n "$REPL_CHAIN" ]]; then
     IFS=',' read -r -a nodes <<< "$REPL_CHAIN"
+    
+    # Pre-flight dependency check (only if --initial is set and NOT a cascaded call)
+    if [[ "$initial_send" == true && "$CASCADED" == false ]]; then
+        echo "${CHAIN_PREFIX}  🛠️  Pre-flight: Checking dependencies (mbuffer, zstd) across all nodes..."
+        for n in "${nodes[@]}"; do
+            n_fqdn=$(resolve_node_fqdn "$n" "$local_ds")
+            n_user=$(resolve_node_user "$n" "$local_ds")
+            
+            echo "${CHAIN_PREFIX}    🔍 Checking $n ($n_fqdn)..."
+            if ! ssh -o ConnectTimeout=5 "${n_user}@${n_fqdn}" "which mbuffer >/dev/null && which zstd >/dev/null"; then
+                die "Missing dependencies (mbuffer or zstd) on node: $n ($n_fqdn). Please install them before proceeding with --initial."
+            fi
+        done
+        echo "${CHAIN_PREFIX}  ✅ All nodes verified."
+    fi
+
     NODES_REMAINING=()
     for i in "${!nodes[@]}"; do
         if [[ "${nodes[i]}" == "$ME" ]]; then
