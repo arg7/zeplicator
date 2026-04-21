@@ -18,6 +18,7 @@ A robust, cascading ZFS replication script designed for multi-node chains. It ha
 - **Graduated Retention**: Different retention policies (keep counts) for each node in the chain.
 - **Skip-Hop Resiliency**: If a downstream node is offline, the script automatically skips it and attempts to replicate to the next node in the chain.
 - **SMTP Alerts**: Sends email notifications for critical failures, initial sync success, role changes, and suspend/resume actions.
+- **Dry-Run Simulation**: Full-chain "what-if" mode using `--dry-run`. It simulates snapshot creation, transfers, and rotation across all nodes using virtual snapshot propagation.
 - **Modular Architecture**: Clean separation of concerns with specialized libraries for common utilities, alerts, retention, and transfers.
 
 ## Dependencies
@@ -122,6 +123,18 @@ zeplicator pool/mydata min1 10 --initial
 ```bash
 zeplicator pool/mydata min1 10 --suspend
 zeplicator pool/mydata min1 10 --resume
+```
+
+### Dry-Run & Simulation
+Simulate the entire replication chain, including virtual snapshot creation and rotation previews, without making any changes:
+```bash
+zeplicator pool/mydata min1 10 --dry-run
+```
+
+### Help & Flags
+For a full list of all available flags and configuration options:
+```bash
+zeplicator --help
 ```
 
 ## Modular Structure
