@@ -86,7 +86,7 @@ node:node3:fs                  node3-pool/data3
 role:master:keep:min1          10
 role:middle:keep:min1          30
 role:sink:keep:min1            90
-smtp_from                      zeplicator@acme.com
+smtp_from                      zep@acme.com
 smtp_host                      mail.acme.com
 smtp_password                  [smtp password]
 smtp_port                      465
@@ -98,8 +98,8 @@ user                           root
 EOF
 
 # Import the configuration into the master dataset
-# (Note: Zeplicator automatically translates shorthand keys to 'repl:*' properties)
-docker exec node1 /scripts/zeplicator-standalone.sh node1-pool/data1 --config --import /scripts/test-bench.conf
+# (Note: Zeplicator automatically translates shorthand keys to 'zep:*' properties)
+docker exec node1 /scripts/zep node1-pool/data1 --config --import /scripts/test-bench.conf
 ```
 
 ### Data Load (IO Simulation)
@@ -132,10 +132,10 @@ docker network disconnect bridge node2
 This scenario assumes **node2** was the original Master.
 
 1.  **Isolate Node 2 (Original Master):** `docker network disconnect bridge node2` (Simulates failure).
-2.  **Elect New Master (Node 1):** On node1, run `zeplicator ... --promote --auto -y`. This configures node1 as Master and node3 as a downstream sink.
+2.  **Elect New Master (Node 1):** On node1, run `zep ... --promote --auto -y`. This configures node1 as Master and node3 as a downstream sink.
 3.  **Diverge Data:** Write unique files to `/node1-pool/data1/` and run replication on node1 to sync Node 1 -> Node 3.
 4.  **Reconnect Node 2:** `docker network connect bridge node2` (The "Ghost Master" returns).
-5.  **Observe Blocked Push:** Run `zeplicator` on node2. It still thinks it is Master, but it will detect that node1/node3 have divergent data and abort with **Exit Code 2** instead of overwriting them.
-6.  **Heal the Chain:** Run `zeplicator ... --promote --auto -y` on node1 to force-realign node2 back into the new chain.
+5.  **Observe Blocked Push:** Run `zep` on node2. It still thinks it is Master, but it will detect that node1/node3 have divergent data and abort with **Exit Code 2** instead of overwriting them.
+6.  **Heal the Chain:** Run `zep ... --promote --auto -y` on node1 to force-realign node2 back into the new chain.
 
 
