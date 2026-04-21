@@ -1,6 +1,6 @@
 #!/bin/bash
 # zeplicator-standalone.sh - Compiled ZFS Replication Manager
-# Built on: Tue Apr 21 12:41:59 PM CEST 2026
+# Built on: Tue Apr 21 01:00:01 PM CEST 2026
 
 # --- BEGIN zfs-common.lib.sh ---
 
@@ -1053,14 +1053,7 @@ if [[ "$PROMOTE" == true ]]; then
     done
     NEW_CHAIN=$(IFS=','; echo "${NEW_NODES[*]}")
     
-    if [[ "$CURRENT_CHAIN" != "$NEW_CHAIN" ]]; then
-        echo "  Updating chain: $CURRENT_CHAIN -> $NEW_CHAIN"
-        zfs set repl:chain="$NEW_CHAIN" "$local_ds"
-        send_smtp_alert "NOTICE: Node $my_hostname has been PROMOTED to Master for dataset $raw_dataset. New chain: $NEW_CHAIN"
-        REPL_CHAIN="$NEW_CHAIN"
-        IS_MASTER=true
-        ME_INDEX=0
-    else
+    if [[ "$CURRENT_CHAIN" == "$NEW_CHAIN" ]]; then
         echo "  $my_hostname is already Master in local config."
         exit 0
     fi
@@ -1154,6 +1147,11 @@ if [[ "$PROMOTE" == true ]]; then
             done
             echo "Chain successfully consistent at @$TARGET_SNAP"
             
+            # Successfully healed, now update local Master state
+            echo "  Updating local chain config: $NEW_CHAIN"
+            zfs set repl:chain="$NEW_CHAIN" "$local_ds"
+            send_smtp_alert "NOTICE: Node $my_hostname has been PROMOTED to Master for dataset $raw_dataset. New chain: $NEW_CHAIN"
+
             # Sync properties to all nodes in the new chain and exit
             echo "  Syncing replication properties across the chain..."
             PROPS_DATA=$(get_repl_props_encoded "$local_ds")
@@ -1170,6 +1168,10 @@ if [[ "$PROMOTE" == true ]]; then
     # If we are here and PROMOTE=true, it means no auto/snap/rollback was requested,
     # but we should still sync the new chain configuration and exit.
     if [[ "$PROMOTE" == true ]]; then
+        echo "  Updating local chain config: $NEW_CHAIN"
+        zfs set repl:chain="$NEW_CHAIN" "$local_ds"
+        send_smtp_alert "NOTICE: Node $my_hostname has been PROMOTED to Master for dataset $raw_dataset. New chain: $NEW_CHAIN"
+
         echo "  Syncing replication properties across the chain..."
         PROPS_DATA=$(get_repl_props_encoded "$local_ds")
         for n in "${NEW_NODES[@]}"; do
