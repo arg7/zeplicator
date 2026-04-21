@@ -97,6 +97,13 @@ resolve_proc_timeout() {
 }
 
 # Resolve pool (filesystem) for a specific node alias
+log_message() {
+    local msg="$1"
+    local alias=$(hostname)
+    local log_file="/var/log/zeplicator-${alias}.log"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$alias] $msg" >> "$log_file" 2>/dev/null || true
+}
+
 resolve_node_pool() {
     local alias=$1
     local ds_raw=$2

@@ -13,31 +13,46 @@ find_best_donor() {
     local ssh_t=$(resolve_ssh_timeout "$ds_raw")
     local proc_t=$(resolve_proc_timeout "$ds_raw")
 
+    log_message "Starting donor discovery for $target_node ($ds_raw)"
+
     # Iterate ALL nodes in chain to find someone who shares a GUID with target
     for (( k=${#nodes[@]}-1; k>=0; k-- )); do
         local donor_alias="${nodes[k]}"
         [[ "$donor_alias" == "$target_node" ]] && continue
         [[ "$donor_alias" == "$ME" ]] && continue
         
+        log_message "Checking potential donor: $donor_alias"
         local donor_fqdn=$(resolve_node_fqdn "$donor_alias" "$ds_raw")
         local donor_user=$(resolve_node_user "$donor_alias" "$ds_raw")
         local donor_target="${donor_user}@${donor_fqdn}"
 
         # Check connectivity to potential donor
-        if ! ssh -o ConnectTimeout="$ssh_t" -o BatchMode=yes "$donor_target" "true" 2>/dev/null; then continue; fi
+        log_message "  Testing connectivity to $donor_target..."
+        if ! ssh -o ConnectTimeout="$ssh_t" -o BatchMode=yes "$donor_target" "true" 2>/dev/null; then 
+            log_message "  ❌ $donor_alias unreachable via SSH."
+            continue 
+        fi
         
         local donor_pool=$(resolve_node_pool "$donor_alias" "$ds_raw")
         local ds_on_donor="${donor_pool}/${ds_raw#*/}"
         if [[ "$donor_pool" == *"/"* ]]; then ds_on_donor="$donor_pool"; fi
         
         # Check if donor has snapshots and shares GUID with target
+        log_message "  Verifying dataset $ds_on_donor on $donor_alias..."
         if timeout "$((ssh_t + 5))" ssh -o ConnectTimeout="$ssh_t" "$donor_target" "zfs list -t snapshot -H -r $ds_on_donor >/dev/null 2>&1"; then
-            if timeout "$((proc_t + 5))" ssh -o ConnectTimeout="$ssh_t" "$donor_target" "$ZEPLICATOR_CMD $ds_raw $label 0 --alias $donor_alias --target $target_node --donor >/dev/null 2>&1"; then
+            log_message "  Performing capability dry-run on $donor_alias..."
+            if timeout "$((proc_t + 5))" ssh -o ConnectTimeout="$ssh_t" "$donor_target" "$ZEPLICATOR_CMD $ds_raw $label 0 --alias $donor_alias --target $target_node --donor --dry-run >/dev/null 2>&1"; then
+                log_message "  ✅ $donor_alias selected as best donor."
                 echo "$donor_alias"
                 return 0
+            else
+                log_message "  ❌ $donor_alias dry-run failed (no common snapshots with $target_node)."
             fi
+        else
+            log_message "  ❌ Dataset or snapshots missing on $donor_alias."
         fi
     done
+    log_message "No suitable donor found for $target_node."
     return 1
 }
 

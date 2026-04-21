@@ -101,6 +101,13 @@ resolve_proc_timeout() {
 }
 
 # Resolve pool (filesystem) for a specific node alias
+log_message() {
+    local msg="$1"
+    local alias=$(hostname)
+    local log_file="/var/log/zeplicator-${alias}.log"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$alias] $msg" >> "$log_file" 2>/dev/null || true
+}
+
 resolve_node_pool() {
     local alias=$1
     local ds_raw=$2
@@ -445,31 +452,46 @@ find_best_donor() {
     local ssh_t=$(resolve_ssh_timeout "$ds_raw")
     local proc_t=$(resolve_proc_timeout "$ds_raw")
 
+    log_message "Starting donor discovery for $target_node ($ds_raw)"
+
     # Iterate ALL nodes in chain to find someone who shares a GUID with target
     for (( k=${#nodes[@]}-1; k>=0; k-- )); do
         local donor_alias="${nodes[k]}"
         [[ "$donor_alias" == "$target_node" ]] && continue
         [[ "$donor_alias" == "$ME" ]] && continue
         
+        log_message "Checking potential donor: $donor_alias"
         local donor_fqdn=$(resolve_node_fqdn "$donor_alias" "$ds_raw")
         local donor_user=$(resolve_node_user "$donor_alias" "$ds_raw")
         local donor_target="${donor_user}@${donor_fqdn}"
 
         # Check connectivity to potential donor
-        if ! ssh -o ConnectTimeout="$ssh_t" -o BatchMode=yes "$donor_target" "true" 2>/dev/null; then continue; fi
+        log_message "  Testing connectivity to $donor_target..."
+        if ! ssh -o ConnectTimeout="$ssh_t" -o BatchMode=yes "$donor_target" "true" 2>/dev/null; then 
+            log_message "  ❌ $donor_alias unreachable via SSH."
+            continue 
+        fi
         
         local donor_pool=$(resolve_node_pool "$donor_alias" "$ds_raw")
         local ds_on_donor="${donor_pool}/${ds_raw#*/}"
         if [[ "$donor_pool" == *"/"* ]]; then ds_on_donor="$donor_pool"; fi
         
         # Check if donor has snapshots and shares GUID with target
+        log_message "  Verifying dataset $ds_on_donor on $donor_alias..."
         if timeout "$((ssh_t + 5))" ssh -o ConnectTimeout="$ssh_t" "$donor_target" "zfs list -t snapshot -H -r $ds_on_donor >/dev/null 2>&1"; then
-            if timeout "$((proc_t + 5))" ssh -o ConnectTimeout="$ssh_t" "$donor_target" "$ZEPLICATOR_CMD $ds_raw $label 0 --alias $donor_alias --target $target_node --donor >/dev/null 2>&1"; then
+            log_message "  Performing capability dry-run on $donor_alias..."
+            if timeout "$((proc_t + 5))" ssh -o ConnectTimeout="$ssh_t" "$donor_target" "$ZEPLICATOR_CMD $ds_raw $label 0 --alias $donor_alias --target $target_node --donor --dry-run >/dev/null 2>&1"; then
+                log_message "  ✅ $donor_alias selected as best donor."
                 echo "$donor_alias"
                 return 0
+            else
+                log_message "  ❌ $donor_alias dry-run failed (no common snapshots with $target_node)."
             fi
+        else
+            log_message "  ❌ Dataset or snapshots missing on $donor_alias."
         fi
     done
+    log_message "No suitable donor found for $target_node."
     return 1
 }
 
@@ -834,6 +856,7 @@ while [[ $# -gt 0 ]]; do
         --sync-props) sync_props_data="$2"; shift 2 ;;
         --target) TARGET_NODE="$2"; shift 2 ;;
         --donor) IS_DONOR=true; shift ;;
+        --dry-run) DRY_RUN=true; shift ;;
         --config) 
             CONFIG_MODE=true
             shift
@@ -1268,6 +1291,7 @@ for hop_node in "${NODES_REMAINING[@]}"; do
     echo "${CHAIN_PREFIX}  🚀 Attempting replication: $local_ds -> $HOP_TARGET (Pool: $NEXT_HOP_POOL)..."
     zfsbud_opts=""
     if [[ "$initial_send" == true ]]; then zfsbud_opts="-i"; fi
+    if [[ "$DRY_RUN" == true ]]; then zfsbud_opts="${zfsbud_opts} -d"; fi
     
     TRANSFER_DONE=false
     if zfsbud_core $zfsbud_opts -s "$NEXT_HOP_POOL" -e "ssh $HOP_TARGET" -v "$local_ds"; then
@@ -1275,7 +1299,14 @@ for hop_node in "${NODES_REMAINING[@]}"; do
         TRANSFER_DONE=true
     else
         echo "${CHAIN_PREFIX}  ⚠️  WARNING: Local replication to $hop_node failed. Searching chain for a better donor..."
-        DONOR_NODE=$(find_best_donor "$hop_node" "$raw_dataset")
+        
+        if [[ "$IS_DONOR" == true ]]; then
+            echo "${CHAIN_PREFIX}  ❌ ERROR: Already acting as donor, skipping recursive discovery."
+            DONOR_NODE=""
+        else
+            DONOR_NODE=$(find_best_donor "$hop_node" "$raw_dataset")
+        fi
+
         if [[ -n "$DONOR_NODE" ]]; then
             donor_fqdn=$(resolve_node_fqdn "$DONOR_NODE" "$raw_dataset")
             donor_user=$(resolve_node_user "$DONOR_NODE" "$raw_dataset")
@@ -1284,7 +1315,15 @@ for hop_node in "${NODES_REMAINING[@]}"; do
             echo "${CHAIN_PREFIX}  ✅ SUCCESS: Found donor peer '$DONOR_NODE' ($donor_fqdn). Delegating healing of '$hop_node'..."
             if ssh "$donor_target" "$ZEPLICATOR_CMD $raw_dataset $label $keep_fallback --alias $DONOR_NODE --target $hop_node --donor"; then
                 echo "${CHAIN_PREFIX}  ✅ Delegated replication from $DONOR_NODE to $hop_node successful."
-                TRANSFER_DONE=true
+                
+                # RETRY local replication now that common ground should exist
+                echo "${CHAIN_PREFIX}  🔄 Retrying local replication to $hop_node..."
+                if zfsbud_core $zfsbud_opts -s "$NEXT_HOP_POOL" -e "ssh $HOP_TARGET" -v "$local_ds"; then
+                    echo "${CHAIN_PREFIX}  ✅ Local replication retry successful."
+                    TRANSFER_DONE=true
+                else
+                    echo "${CHAIN_PREFIX}  ❌ ERROR: Local replication retry failed after donor healing."
+                fi
             else
                 echo "${CHAIN_PREFIX}  ❌ ERROR: Delegated replication from $DONOR_NODE failed."
             fi
@@ -1304,29 +1343,34 @@ for hop_node in "${NODES_REMAINING[@]}"; do
             send_smtp_alert "SUCCESS: Initial replication of $local_ds completed successfully to $hop_node ($HOP_TARGET)."
         fi
         
-        echo "${CHAIN_PREFIX}  🔗 Cascading: triggering downstream chain for $local_ds on $HOP_TARGET"
-        casc_opts="--alias $hop_node"
-        if [[ "$initial_send" == true ]]; then casc_opts+=" --initial"; fi
-        PROPS_ARG=$(get_repl_props_encoded "$local_ds")
-        
-        # We pass the prefix to maintain the visual tree across SSH hops
-        DOWNSTREAM_OUT=$(timeout "$((REPL_TIMEOUT + 5))" ssh -o ConnectTimeout="$REPL_SSH_TIMEOUT" "$HOP_TARGET" "export CHAIN_PREFIX=\"${CHAIN_PREFIX}\"; $ZEPLICATOR_CMD $raw_dataset $label $keep_fallback $casc_opts --sync-props $PROPS_ARG --cascaded" 2>&1)
-        SSH_STATUS=$?
-        
-        echo "$DOWNSTREAM_OUT" | grep -v "^SENT_LIST:"
-        
         CASCADE_VERIFIED=false
-        if [[ $SSH_STATUS -eq 0 ]]; then
-            ARRIVED_LIST=$(echo "$DOWNSTREAM_OUT" | grep "^SENT_LIST:" | cut -d':' -f2)
+        if [[ "$PROMOTE" == false && "$IS_DONOR" == false && "$DRY_RUN" == false ]]; then
+            echo "${CHAIN_PREFIX}  🔗 Cascading: triggering downstream chain for $local_ds on $HOP_TARGET"
+            casc_opts="--alias $hop_node"
+            if [[ "$initial_send" == true ]]; then casc_opts+=" --initial"; fi
+            PROPS_ARG=$(get_repl_props_encoded "$local_ds")
             
-            if [[ -n "$LATEST_SNAP" && ",$ARRIVED_LIST," == *",$LATEST_SNAP,"* ]]; then
-                echo "${CHAIN_PREFIX}  ✅ VERIFICATION SUCCESS: Snapshot $LATEST_SNAP confirmed reaching a sink node."
-                CASCADE_VERIFIED=true
+            # We pass the prefix to maintain the visual tree across SSH hops
+            DOWNSTREAM_OUT=$(timeout "$((REPL_TIMEOUT + 5))" ssh -o ConnectTimeout="$REPL_SSH_TIMEOUT" "$HOP_TARGET" "export CHAIN_PREFIX=\"${CHAIN_PREFIX}\"; $ZEPLICATOR_CMD $raw_dataset $label $keep_fallback $casc_opts --sync-props $PROPS_ARG --cascaded" 2>&1)
+            SSH_STATUS=$?
+            
+            echo "$DOWNSTREAM_OUT" | grep -v "^SENT_LIST:"
+            
+            if [[ $SSH_STATUS -eq 0 ]]; then
+                ARRIVED_LIST=$(echo "$DOWNSTREAM_OUT" | grep "^SENT_LIST:" | cut -d':' -f2)
+                
+                if [[ -n "$LATEST_SNAP" && ",$ARRIVED_LIST," == *",$LATEST_SNAP,"* ]]; then
+                    echo "${CHAIN_PREFIX}  ✅ VERIFICATION SUCCESS: Snapshot $LATEST_SNAP confirmed reaching a sink node."
+                    CASCADE_VERIFIED=true
+                else
+                    echo "${CHAIN_PREFIX}  ⚠️  WARNING: Verification FAILED. Snapshot $LATEST_SNAP not confirmed at end of chain, but transfer to $hop_node succeeded."
+                fi
             else
-                echo "${CHAIN_PREFIX}  ⚠️  WARNING: Verification FAILED. Snapshot $LATEST_SNAP not confirmed at end of chain, but transfer to $hop_node succeeded."
+                echo "${CHAIN_PREFIX}  ⚠️  WARNING: Downstream cascade from $hop_node failed (Code: $SSH_STATUS)."
             fi
         else
-            echo "${CHAIN_PREFIX}  ⚠️  WARNING: Downstream cascade from $hop_node failed (Code: $SSH_STATUS)."
+            # If donor run or dry run, we consider the local transfer as enough for "success" of this hop
+            CASCADE_VERIFIED=true
         fi
 
         if [[ "$CASCADE_VERIFIED" == true ]]; then
