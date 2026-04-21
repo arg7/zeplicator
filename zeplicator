@@ -375,7 +375,7 @@ if [[ "$PROMOTE" == true ]]; then
                 n_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
                 n_user=$(resolve_node_user "$n" "$raw_dataset")
                 echo "    Syncing properties to $n ($n_fqdn)..."
-                ssh "${n_user}@${n_fqdn}" "$ZEPLICATOR_CMD $raw_dataset $label $keep_fallback --sync-props $PROPS_DATA --mark-only --alias $n" || echo "  Warning: Prop sync failed on $n"
+                ssh "${n_user}@${n_fqdn}" "export CHAIN_PREFIX=\"      \"; $ZEPLICATOR_CMD $raw_dataset $label $keep_fallback --sync-props $PROPS_DATA --mark-only --alias $n" || echo "  Warning: Prop sync failed on $n"
             done
             exit 0
         fi
@@ -394,7 +394,7 @@ if [[ "$PROMOTE" == true ]]; then
             n_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
             n_user=$(resolve_node_user "$n" "$raw_dataset")
             echo "    Syncing properties to $n ($n_fqdn)..."
-            ssh "${n_user}@${n_fqdn}" "$ZEPLICATOR_CMD $raw_dataset $label $keep_fallback --sync-props $PROPS_DATA --mark-only --alias $n" || echo "  Warning: Prop sync failed on $n"
+            ssh "${n_user}@${n_fqdn}" "export CHAIN_PREFIX=\"      \"; $ZEPLICATOR_CMD $raw_dataset $label $keep_fallback --sync-props $PROPS_DATA --mark-only --alias $n" || echo "  Warning: Prop sync failed on $n"
         done
         exit 0
     fi

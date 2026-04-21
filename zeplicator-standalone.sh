@@ -1,6 +1,6 @@
 #!/bin/bash
 # zeplicator-standalone.sh - Compiled ZFS Replication Manager
-# Built on: Tue Apr 21 02:09:04 PM CEST 2026
+# Built on: Tue Apr 21 02:18:32 PM CEST 2026
 
 # --- BEGIN zfs-common.lib.sh ---
 
@@ -179,8 +179,8 @@ apply_repl_props() {
             local current_val=$(zfs get -H -o value "${p%%=*}" "$ds" 2>/dev/null)
             local new_val="${p#*=}"
             if [[ "$current_val" != "$new_val" ]]; then
-                echo "  Updating ${p%%=*} -> $new_val"
-                zfs set "$p" "$ds" || echo "  Warning: Failed to set $p"
+                echo "${CHAIN_PREFIX}    Updating ${p%%=*} -> $new_val"
+                zfs set "$p" "$ds" || echo "${CHAIN_PREFIX}    Warning: Failed to set $p"
             fi
         fi
     done
@@ -1188,7 +1188,7 @@ if [[ "$PROMOTE" == true ]]; then
                 n_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
                 n_user=$(resolve_node_user "$n" "$raw_dataset")
                 echo "    Syncing properties to $n ($n_fqdn)..."
-                ssh "${n_user}@${n_fqdn}" "$ZEPLICATOR_CMD $raw_dataset $label $keep_fallback --sync-props $PROPS_DATA --mark-only --alias $n" || echo "  Warning: Prop sync failed on $n"
+                ssh "${n_user}@${n_fqdn}" "export CHAIN_PREFIX=\"      \"; $ZEPLICATOR_CMD $raw_dataset $label $keep_fallback --sync-props $PROPS_DATA --mark-only --alias $n" || echo "  Warning: Prop sync failed on $n"
             done
             exit 0
         fi
@@ -1207,7 +1207,7 @@ if [[ "$PROMOTE" == true ]]; then
             n_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
             n_user=$(resolve_node_user "$n" "$raw_dataset")
             echo "    Syncing properties to $n ($n_fqdn)..."
-            ssh "${n_user}@${n_fqdn}" "$ZEPLICATOR_CMD $raw_dataset $label $keep_fallback --sync-props $PROPS_DATA --mark-only --alias $n" || echo "  Warning: Prop sync failed on $n"
+            ssh "${n_user}@${n_fqdn}" "export CHAIN_PREFIX=\"      \"; $ZEPLICATOR_CMD $raw_dataset $label $keep_fallback --sync-props $PROPS_DATA --mark-only --alias $n" || echo "  Warning: Prop sync failed on $n"
         done
         exit 0
     fi
