@@ -1,4 +1,4 @@
-# Zeplicator: ZFS Replication Manager
+# Zep: ZFS Replication Manager
 
 A robust, cascading ZFS replication script designed for multi-node chains. It handles snapshot creation, incremental transfers with resume support, and graduated retention across the entire chain.
 
@@ -37,8 +37,8 @@ The following packages must be installed on all nodes:
    ```bash
    git clone https://github.com/arg7/zfs-replication.git
    cd zfs-replication
-   ./build.sh  # Generates zeplicator-standalone.sh
-   ln -s $(pwd)/zeplicator-standalone.sh /usr/local/bin/zeplicator
+   ./build.sh  # Generates zep-standalone.sh
+   ln -s $(pwd)/zep-standalone.sh /usr/local/bin/zep
    ```
 
 2. **SSH Connectivity**:
@@ -64,7 +64,7 @@ The following packages must be installed on all nodes:
 
 ### Configuration Management (`--config`)
 
-Zeplicator provides a built-in configuration engine to manage `repl:*` ZFS properties without needing to call `zfs set` manually. It supports shorthand prefixes for common settings.
+Zep provides a built-in configuration engine to manage `repl:*` ZFS properties without needing to call `zfs set` manually. It supports shorthand prefixes for common settings.
 
 #### Available Subcommands:
 
@@ -80,7 +80,7 @@ Zeplicator provides a built-in configuration engine to manage `repl:*` ZFS prope
 
 **1. Viewing Configuration**
 ```bash
-zeplicator pool/mydata --config  # or --config --list
+zep pool/mydata --config  # or --config --list
 ```
 
 **2. Setting Properties (with Shorthands)**
@@ -90,68 +90,68 @@ Shorthands automatically expand to their full ZFS property names:
 - `role:sink:keep:min1=90` $\rightarrow$ `repl:role:sink:keep:min1=90`
 
 ```bash
-zeplicator pool/mydata --config smtp:host=smtp.gmail.com smtp:port=587 node:node1:user=repl
+zep pool/mydata --config smtp:host=smtp.gmail.com smtp:port=587 node:node1:user=repl
 ```
 
 **3. Clearing a Property**
 ```bash
-zeplicator pool/mydata --config --clear smtp:port
+zep pool/mydata --config --clear smtp:port
 ```
 
 **4. Batch Import/Export**
 ```bash
 # Export settings from one dataset
-zeplicator pool/old-data --config --export /tmp/repl.conf
+zep pool/old-data --config --export /tmp/repl.conf
 
 # Import to another dataset
-zeplicator pool/new-data --config --import /tmp/repl.conf
+zep pool/new-data --config --import /tmp/repl.conf
 ```
 
 ### Usage
 
 ### Basic Replication
 ```bash
-zeplicator pool/mydata min1 10
+zep pool/mydata min1 10
 ```
 
 ### Explicit Identity Override
 If auto-discovery fails (hostname doesn't match and IP isn't in DNS/config), you can force the node's alias:
 ```bash
-zeplicator pool/mydata min1 10 --alias node2
+zep pool/mydata min1 10 --alias node2
 ```
 
 ### Initial Replication
 For the first run (no common snapshots downstream). Sends a success email upon completion.
 ```bash
-zeplicator pool/mydata min1 10 --initial
+zep pool/mydata min1 10 --initial
 ```
 
 ### Master Promotion & Recovery
 1. **Auto-Discovery (Recommended)**:
    ```bash
-   zeplicator pool/mydata min1 10 --promote --auto [-y]
+   zep pool/mydata min1 10 --promote --auto [-y]
    ```
 2. **Brutal Startover (Dangerous)**:
    ```bash
-   zeplicator pool/mydata min1 10 --promote --destroy-chain
+   zep pool/mydata min1 10 --promote --destroy-chain
    ```
 
 ### Pause & Resume
 ```bash
-zeplicator pool/mydata min1 10 --suspend
-zeplicator pool/mydata min1 10 --resume
+zep pool/mydata min1 10 --suspend
+zep pool/mydata min1 10 --resume
 ```
 
 ### Dry-Run & Simulation
 Simulate the entire replication chain, including virtual snapshot creation and rotation previews, without making any changes:
 ```bash
-zeplicator pool/mydata min1 10 --dry-run
+zep pool/mydata min1 10 --dry-run
 ```
 
 ### Help & Flags
 For a full list of all available flags and configuration options:
 ```bash
-zeplicator --help
+zep --help
 ```
 
 ## Modular Structure
@@ -162,7 +162,7 @@ The project is split into several libraries for easier testing:
 - `zfs-transfer.lib.sh`: The core replication engine.
 - `zeplicator`: The main orchestrator script.
 
-Use `./build.sh` to compile these into a single `zeplicator-standalone.sh` for distribution.
+Use `./build.sh` to compile these into a single `zep-standalone.sh` for distribution.
 
 ## Credits
 This script incorporates core logic from `zfsbud.sh` by [Pawel Ginalski (gbyte.dev)](https://gbyte.dev).
