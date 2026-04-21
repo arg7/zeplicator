@@ -206,10 +206,12 @@ die() {
             send_smtp_alert "ERROR: $msg"
         fi
     fi
-    echo "HINT: If replication failed due to divergent snapshots, try recovery options:"
-    echo "  --promote --auto [-y]         (Auto-discover latest common snapshot and rollback chain)"
-    echo "  --promote --snap <name> [-y]  (Rollback chain to specific snapshot)"
-    echo "  --promote --destroy-chain     (DANGER: Destroy downstream datasets and start over)"
+    if [[ "$CASCADED" != true ]]; then
+        echo "HINT: If replication failed due to divergent snapshots, try recovery options:"
+        echo "  --promote --auto [-y]         (Auto-discover latest common snapshot and rollback chain)"
+        echo "  --promote --snap <name> [-y]  (Rollback chain to specific snapshot)"
+        echo "  --promote --destroy-chain     (DANGER: Destroy downstream datasets and start over)"
+    fi
     exit $exit_code
 }
 
