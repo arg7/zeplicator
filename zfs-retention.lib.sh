@@ -66,8 +66,12 @@ resolve_retention() {
         fi
 
         if [[ "$is_shipped" == true ]]; then
-            echo "${CHAIN_PREFIX}  🗑️  Purging old shipped snapshot: $snap_name"
-            zfs destroy "$snap_name"
+            if [[ "$DRY_RUN" == true ]]; then
+                echo "${CHAIN_PREFIX}  🗑️  [DRY RUN] Would purge old shipped snapshot: $snap_name"
+            else
+                echo "${CHAIN_PREFIX}  🗑️  Purging old shipped snapshot: $snap_name"
+                zfs destroy "$snap_name"
+            fi
         else
             echo "${CHAIN_PREFIX}  🛡️  KEEPING old snapshot (NOT YET SHIPPED): $snap_name"
         fi

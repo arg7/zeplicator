@@ -25,6 +25,8 @@ SUSPEND=false
 RESUME=false
 AUTO=false
 DRY_RUN=false
+VIRTUAL_SNAPS_INCOMING=""
+VIRTUAL_SNAP_CREATED=""
 DESTROY_CHAIN=false
 YES=false
 PROMOTE_SNAP=""
@@ -55,6 +57,7 @@ while [[ $# -gt 0 ]]; do
         --target) TARGET_NODE="$2"; shift 2 ;;
         --donor) IS_DONOR=true; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
+        --snap-list) VIRTUAL_SNAPS_INCOMING="$2"; shift 2 ;;
         --config) 
             CONFIG_MODE=true
             shift
@@ -493,7 +496,9 @@ if [[ -n "$REPL_CHAIN" ]]; then
         CHAIN_PREFIX+="  | "
     fi
     
-    echo "${CHAIN_PREFIX}🏁 Start: $(date); Dataset: $local_ds; Label: $label"
+    dry_flag=""
+    [[ "$DRY_RUN" == true ]] && dry_flag=" [DRY RUN]"
+    echo "${CHAIN_PREFIX}🏁 Start${dry_flag}: $(date); Dataset: $local_ds; Label: $label"
     
     RESOLVED_KEEP=$(resolve_retention "$local_ds" "$label" "$keep_fallback")
     echo "${CHAIN_PREFIX}  🛡️  Using dynamic retention for $label: $RESOLVED_KEEP (Role: $( [[ $ME_INDEX -eq 0 ]] && echo "master" || ( [[ $ME_INDEX -eq $((${#nodes[@]}-1)) ]] && echo "sink" || echo "middle" ) ))"
@@ -531,8 +536,13 @@ check_stuck_job
 # 1. Snapshot creation (Master only)
 if [[ "$IS_MASTER" == true && "$CASCADED" == false && "$PROMOTE" == false && -z "$TARGET_NODE" && "$IS_DONOR" == false ]]; then
     timestamp=$(date -u +%Y-%m-%d-%H%M)
-    snap_name="${local_ds}@zeplicator_${label}-${timestamp}"
-    if zfs list -t snap "$snap_name" >/dev/null 2>&1; then
+    snap_name_base="zeplicator_${label}-${timestamp}"
+    snap_name="${local_ds}@${snap_name_base}"
+
+    if [[ "$DRY_RUN" == true ]]; then
+        echo "${CHAIN_PREFIX}  ⏳ [DRY RUN] Would create snapshot: $snap_name"
+        VIRTUAL_SNAP_CREATED="$snap_name_base"
+    elif zfs list -t snap "$snap_name" >/dev/null 2>&1; then
         echo "${CHAIN_PREFIX}  ⏳ Snapshot $snap_name already exists. Reusing..."
     else
         echo "${CHAIN_PREFIX}  ⏳ Creating snapshot: $snap_name"
@@ -552,6 +562,22 @@ else
 fi
 
 LATEST_SNAP=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*$label" | head -n 1 | cut -d'@' -f2)
+if [[ "$DRY_RUN" == true && -n "$VIRTUAL_SNAP_CREATED" ]]; then
+    LATEST_SNAP="$VIRTUAL_SNAP_CREATED"
+fi
+
+# If we are in a cascaded/donor run and still don't have a LATEST_SNAP by label,
+# use the literal latest snapshot available to ensure verification logic has something to check.
+if [[ -z "$LATEST_SNAP" && ( "$CASCADED" == true || "$IS_DONOR" == true ) ]]; then
+    LATEST_SNAP=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | head -n 1 | cut -d'@' -f2)
+    # If in dry-run, check virtuals too
+    if [[ "$DRY_RUN" == true ]]; then
+        if [[ -n "$VIRTUAL_SNAPS_INCOMING" ]]; then
+            # Use the first one from the incoming list as it's the "newest" from upstream
+            LATEST_SNAP="${VIRTUAL_SNAPS_INCOMING%%,*}"
+        fi
+    fi
+fi
 
 # 2. Replication & Audit
 # 2. Replication & Audit
@@ -648,14 +674,30 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
         fi
         
         CASCADE_VERIFIED=false
-        if [[ "$PROMOTE" == false && "$IS_DONOR" == false && "$DRY_RUN" == false ]]; then
+        if [[ "$PROMOTE" == false && "$IS_DONOR" == false ]]; then
             echo "${CHAIN_PREFIX}  🔗 Cascading: triggering downstream chain for $local_ds on $HOP_TARGET"
             casc_opts="--alias $hop_node"
             if [[ "$initial_send" == true ]]; then casc_opts+=" --initial"; fi
+            if [[ "$DRY_RUN" == true ]]; then casc_opts+=" --dry-run"; fi
             PROPS_ARG=$(get_repl_props_encoded "$local_ds")
             
+            # Internal list of what arrived here (including virtual snaps)
+            MY_ARRIVED=""
+            if [[ "$PROMOTE" == true || "$CASCADED" == true ]]; then
+                MY_ARRIVED=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | cut -d'@' -f2 | xargs | tr ' ' ',')
+            else
+                MY_ARRIVED=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*$label" | cut -d'@' -f2 | xargs | tr ' ' ',')
+            fi
+            
+            if [[ "$DRY_RUN" == true ]]; then
+                [[ -n "$VIRTUAL_SNAPS_INCOMING" ]] && MY_ARRIVED="${MY_ARRIVED},${VIRTUAL_SNAPS_INCOMING}"
+                [[ -n "$VIRTUAL_SNAP_CREATED" ]] && MY_ARRIVED="${MY_ARRIVED},${VIRTUAL_SNAP_CREATED}"
+                # Clean up commas
+                MY_ARRIVED=$(echo "$MY_ARRIVED" | sed 's/,,*/,/g' | sed 's/^,//;s/,$//')
+            fi
+
             # We pass the prefix to maintain the visual tree across SSH hops
-            DOWNSTREAM_OUT=$(timeout "$((REPL_TIMEOUT + 5))" ssh -o ConnectTimeout="$REPL_SSH_TIMEOUT" "$HOP_TARGET" "export CHAIN_PREFIX=\"${CHAIN_PREFIX}\"; $ZEPLICATOR_CMD $raw_dataset $label $keep_fallback $casc_opts --sync-props $PROPS_ARG --cascaded" 2>&1)
+            DOWNSTREAM_OUT=$(timeout "$((REPL_TIMEOUT + 5))" ssh -o ConnectTimeout="$REPL_SSH_TIMEOUT" "$HOP_TARGET" "export CHAIN_PREFIX=\"${CHAIN_PREFIX}\"; $ZEPLICATOR_CMD $raw_dataset $label $keep_fallback $casc_opts --sync-props $PROPS_ARG --snap-list \"$MY_ARRIVED\" --cascaded" 2>&1)
             SSH_STATUS=$?
 
             if [[ $SSH_STATUS -eq 2 ]]; then
@@ -709,11 +751,15 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
 done
 
 if [[ "$REPLICATION_SUCCESS" == true ]]; then
-    echo "${CHAIN_PREFIX}  🏷️  Marking local snapshots ($local_ds) as shipped..."
-    zfs list -t snap -o name -H -r "$local_ds" | grep "@.*$label" | \
-    while read s; do
-        zfs set zfs-send:shipped=true "$s"
-    done
+    if [[ "$DRY_RUN" == true ]]; then
+        echo "${CHAIN_PREFIX}  🏷️  [DRY RUN] Would mark local snapshots ($local_ds) as shipped..."
+    else
+        echo "${CHAIN_PREFIX}  🏷️  Marking local snapshots ($local_ds) as shipped..."
+        zfs list -t snap -o name -H -r "$local_ds" | grep "@.*$label" | \
+        while read s; do
+            zfs set zfs-send:shipped=true "$s"
+        done
+    fi
     purge_shipped_snapshots "$local_ds" "$label" "$RESOLVED_KEEP"
     
     # Internal state reporting for upstream verification (only needed if NOT the initiating Master)
@@ -723,6 +769,12 @@ if [[ "$REPLICATION_SUCCESS" == true ]]; then
             MY_LIST=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | cut -d'@' -f2 | xargs | tr ' ' ',')
         else
             MY_LIST=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*$label" | cut -d'@' -f2 | xargs | tr ' ' ',')
+        fi
+        
+        if [[ "$DRY_RUN" == true ]]; then
+            [[ -n "$VIRTUAL_SNAPS_INCOMING" ]] && MY_LIST="${MY_LIST},${VIRTUAL_SNAPS_INCOMING}"
+            [[ -n "$VIRTUAL_SNAP_CREATED" ]] && MY_LIST="${MY_LIST},${VIRTUAL_SNAP_CREATED}"
+            MY_LIST=$(echo "$MY_LIST" | sed 's/,,*/,/g' | sed 's/^,//;s/,$//')
         fi
         echo "SENT_LIST:$MY_LIST"
     fi
@@ -736,18 +788,32 @@ else
     else
         echo "${CHAIN_PREFIX}  🏁 End of chain ($ME). Reporting state."
         
-        echo "${CHAIN_PREFIX}  🏷️  Sink node marking snapshots ($local_ds) as shipped..."
-        zfs list -t snap -o name -H -r "$local_ds" | grep "@.*$label" | \
-        while read s; do
-            zfs set zfs-send:shipped=true "$s"
-        done
+        if [[ "$DRY_RUN" == true ]]; then
+            echo "${CHAIN_PREFIX}  🏷️  [DRY RUN] Sink node would mark snapshots ($local_ds) as shipped..."
+        else
+            echo "${CHAIN_PREFIX}  🏷️  Sink node marking snapshots ($local_ds) as shipped..."
+            zfs list -t snap -o name -H -r "$local_ds" | grep "@.*$label" | \
+            while read s; do
+                zfs set zfs-send:shipped=true "$s"
+            done
+        fi
         purge_shipped_snapshots "$local_ds" "$label" "$RESOLVED_KEEP"
     fi
 
-    SINK_LIST=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*$label" | cut -d'@' -f2 | xargs | tr ' ' ',')
+    if [[ "$DRY_RUN" == true ]]; then
+        # Report combined virtual + real list
+        SINK_LIST=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*$label" | cut -d'@' -f2 | xargs | tr ' ' ',')
+        [[ -n "$VIRTUAL_SNAPS_INCOMING" ]] && SINK_LIST="${SINK_LIST},${VIRTUAL_SNAPS_INCOMING}"
+        [[ -n "$VIRTUAL_SNAP_CREATED" ]] && SINK_LIST="${SINK_LIST},${VIRTUAL_SNAP_CREATED}"
+        SINK_LIST=$(echo "$SINK_LIST" | sed 's/,,*/,/g' | sed 's/^,//;s/,$//')
+    else
+        SINK_LIST=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*$label" | cut -d'@' -f2 | xargs | tr ' ' ',')
+    fi
     # Internal state reporting (silenced from user view)
     echo "SENT_LIST:$SINK_LIST"
 fi
 
-echo "${CHAIN_PREFIX}  ✅ Done: $(date)"
+dry_done=""
+[[ "$DRY_RUN" == true ]] && dry_done=" [DRY RUN]"
+echo "${CHAIN_PREFIX}  ✅ Done${dry_done}: $(date)"
 exit 0

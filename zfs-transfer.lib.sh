@@ -115,7 +115,23 @@ zfsbud_core() {
     [[ $token ]] && [[ $token != "-" ]] && resume_token=$token
   }
 
-  get_local_snapshots() { zfs list -H -o name,guid -t snapshot | grep "$1@"; }
+  get_local_snapshots() { 
+    zfs list -H -o name,guid -t snapshot | grep "$1@"
+    if [[ "$DRY_RUN" == true ]]; then
+        # Inject virtual snapshots from upstream
+        if [[ -n "$VIRTUAL_SNAPS_INCOMING" ]]; then
+            IFS=',' read -ra v_snaps <<< "$VIRTUAL_SNAPS_INCOMING"
+            for v in "${v_snaps[@]}"; do
+                [[ -z "$v" ]] && continue
+                echo -e "${1}@${v}\tVIRTUAL"
+            done
+        fi
+        # Inject locally created virtual snapshot
+        if [[ -n "$VIRTUAL_SNAP_CREATED" ]]; then
+            echo -e "${1}@${VIRTUAL_SNAP_CREATED}\tVIRTUAL"
+        fi
+    fi
+  }
   
   set_source_snapshots() {
     # format: dataset@name<tab>guid
@@ -152,6 +168,16 @@ zfsbud_core() {
         
         [[ -z "$source_guid" || "$source_guid" == "-" ]] && continue
         
+        # If both are virtual or one is virtual, we compare names
+        if [[ "$source_guid" == "VIRTUAL" || "$dest_guid" == "VIRTUAL" ]]; then
+            if [[ "${source_snap#*@}" == "${dest_snap#*@}" ]]; then
+               last_snapshot_common="${source_snap#*@}"
+               zbud_msg "  🔍 Found common VIRTUAL snapshot by name: $last_snapshot_common"
+               return 0
+            fi
+            continue
+        fi
+
         if [[ "$source_guid" == "$dest_guid" ]]; then
            last_snapshot_common="${source_snap#*@}"
            zbud_msg "  🔍 Found common snapshot by GUID: $last_snapshot_common (GUID: $source_guid)"
@@ -166,6 +192,13 @@ zfsbud_core() {
     local latest_line=${source_snapshots[-1]}
     local latest_snapshot_source=$(echo "$latest_line" | awk '{print $1}')
     local remote_ds="$1"
+
+    if [[ "$dry_run" == true ]]; then
+        zbud_msg "  🚀 [DRY RUN] Would send initial snapshot to $remote_ds: $latest_snapshot_source"
+        last_snapshot_common="${latest_snapshot_source#*@}"
+        return 0
+    fi
+
     zbud_msg "Initial source snapshot (latest): $latest_snapshot_source"
     zbud_msg "Sending initial snapshot to destination $remote_ds..."
     
@@ -214,6 +247,12 @@ zfsbud_core() {
       zbud_msg "  ⏩ Skipping incremental: already up to date."
       return 0
     fi
+
+    if [[ "$dry_run" == true ]]; then
+        zbud_msg "  🚀 [DRY RUN] Would send incremental: $last_snapshot_common -> ${latest_snapshot_source#*@} to $remote_ds"
+        return 0
+    fi
+
     zbud_msg "  🚀 Sending incremental: $last_snapshot_common -> ${latest_snapshot_source#*@} to $remote_ds"
     
     # Identify LOCAL dataset to send from

@@ -183,8 +183,12 @@ apply_repl_props() {
             local current_val=$(zfs get -H -o value "${p%%=*}" "$ds" 2>/dev/null)
             local new_val="${p#*=}"
             if [[ "$current_val" != "$new_val" ]]; then
-                echo "${CHAIN_PREFIX}    Updating ${p%%=*} -> $new_val"
-                zfs set "$p" "$ds" || echo "${CHAIN_PREFIX}    Warning: Failed to set $p"
+                if [[ "$DRY_RUN" == true ]]; then
+                    echo "${CHAIN_PREFIX}    [DRY RUN] Would update ${p%%=*} -> $new_val"
+                else
+                    echo "${CHAIN_PREFIX}    Updating ${p%%=*} -> $new_val"
+                    zfs set "$p" "$ds" || echo "${CHAIN_PREFIX}    Warning: Failed to set $p"
+                fi
             fi
         fi
     done
