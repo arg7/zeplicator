@@ -243,6 +243,7 @@ check_stuck_job() {
     [[ -n "$CLI_ALIAS" ]] && lock_suffix="-${CLI_ALIAS}"
     local lock_name="${dataset//\//-}-${label}${lock_suffix}.lock"
     LOCKFILE="/tmp/${lock_name}"
+    export LOCKFILE
     
     local timeout_val=$(resolve_proc_timeout "$dataset")
     
@@ -301,62 +302,27 @@ check_stuck_job() {
     done
 
     echo "$$" > "$LOCKFILE"
-    trap 'rm -f "$LOCKFILE"' EXIT
+    trap 'rm -f "$LOCKFILE" "${LOCKFILE}.cnt"' EXIT
 }
 
-# High-performance pipe monitor to track bytes and update lock file
+# High-performance pipe monitor to track bytes and update progress file
 iomon() {
     local lock="$1"
     local interval="$2"
-    perl -e '
-        my ($lock, $int) = @ARGV;
-        my $total = 0;
-        my $last_update = time();
-        $| = 1; # Autoflush STDOUT
-        while (sysread(STDIN, my $buf, 1024*1024)) {
-            my $len = length($buf);
-            my $offset = 0;
-            while ($offset < $len) {
-                my $written = syswrite(STDOUT, $buf, $len - $offset, $offset);
-                die "syswrite failed: $!" unless defined $written;
-                $offset += $written;
-            }
-            $total += $len;
-            my $now = time();
-            if ($now - $last_update >= $int) {
-                if (open(my $fh, "<", $lock)) {
-                    my $content = <$fh>;
-                    close($fh);
-                    if ($content) {
-                        my @p = split(" ", $content);
-                        $p[3] = $total; # Update the size/progress field
-                        if (open(my $wh, ">", $lock)) {
-                            print $wh join(" ", @p) . "\n";
-                            close($wh);
-                        }
-                    }
-                }
-                $last_update = $now;
-            }
-        }
-    ' "$lock" "$interval"
+    # Call the C binary
+    /usr/local/bin/iomon "$lock" "$interval"
 }
 
 check_replication_progress() {
     local ds="$1"
-    [[ -f "$LOCKFILE" ]] || return 1
+    local cnt_file="${LOCKFILE}.cnt"
+    [[ -f "$cnt_file" ]] || return 1
     
-    # Read lock file: PID [TARGET_NODE] [TARGET_DS] [LAST_SIZE]
-    local lock_data=($(cat "$LOCKFILE" 2>/dev/null))
-    local last_size="${lock_data[3]:-0}"
+    local last_size=$(cat "$cnt_file" 2>/dev/null || echo 0)
 
-    # Wait a bit to see if size increases (since cron runs are usually 1 min apart, 
-    # we can just compare against the last recorded size from the previous run)
-    # The 'iomon' updates the lock file every 10s.
-    
+    # Wait a bit to see if size increases
     sleep 2
-    local current_data=($(cat "$LOCKFILE" 2>/dev/null))
-    local current_size="${current_data[3]:-0}"
+    local current_size=$(cat "$cnt_file" 2>/dev/null || echo 0)
 
     if [[ "$current_size" -gt "$last_size" ]]; then
         return 0 # Progress made

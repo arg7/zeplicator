@@ -4,6 +4,9 @@
 
 OUTPUT="zeplicator-standalone.sh"
 
+echo "Compiling iomon.c..."
+gcc -O3 iomon.c -o iomon || exit 1
+
 echo "Building ${OUTPUT}..."
 
 cat <<EOF > "${OUTPUT}"

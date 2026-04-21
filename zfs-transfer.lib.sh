@@ -199,15 +199,9 @@ zfsbud_core() {
       fi
 
       if [ -n "$remote_shell" ]; then
-        ! timeout "$timeout_val" bash -c "zfs send $send_args \"$latest_snapshot_source\" 2>>/tmp/zfs-replication.err | mbuffer -q -r \"$RATE\" -m \"$BUF\" 2>>/tmp/zfs-replication.err | zstd 2>>/tmp/zfs-replication.err | $remote_shell -o ConnectTimeout=\"$ssh_t\" \"zstd -d | zfs recv $recv_args $remote_ds\" 2>>/tmp/zfs-replication.err" && return 1
+        ! timeout "$timeout_val" bash -c "set -o pipefail; zfs send $send_args \"$latest_snapshot_source\" 2>>/tmp/zfs-replication.err | iomon \"${LOCKFILE:-/tmp/zeplicator-default.lock}\" 1 | mbuffer -q -r \"$RATE\" -m \"$BUF\" 2>>/tmp/zfs-replication.err | zstd 2>>/tmp/zfs-replication.err | $remote_shell -o ConnectTimeout=\"$ssh_t\" \"zstd -d | zfs recv $recv_args $remote_ds\" 2>>/tmp/zfs-replication.err" && return 1
       else
-        ! timeout "$timeout_val" bash -c "zfs send $send_args \"$latest_snapshot_source\" 2>>/tmp/zfs-replication.err | zfs recv $recv_args \"$remote_ds\" 2>>/tmp/zfs-replication.err" && return 1
-      fi
-
-      local delay=$(get_zfs_prop "repl:debug:send_delay" "$local_ds")
-      if [[ -n "$delay" && "$delay" -gt 0 ]]; then
-        zbud_msg "  🧪 DEBUG: Sleeping for ${delay}s after zfs send (Initial)..."
-        sleep "$delay"
+        ! timeout "$timeout_val" bash -c "set -o pipefail; zfs send $send_args \"$latest_snapshot_source\" 2>>/tmp/zfs-replication.err | iomon \"${LOCKFILE:-/tmp/zeplicator-default.lock}\" 1 | zfs recv $recv_args \"$remote_ds\" 2>>/tmp/zfs-replication.err" && return 1
       fi
     fi
     last_snapshot_common="${latest_snapshot_source#*@}"
@@ -250,7 +244,7 @@ zfsbud_core() {
 
         set -o pipefail
         # We use a subshell on the remote to capture its stderr and print it to stdout so we can catch it locally
-        timeout "$timeout_val" bash -c "zfs send $send_args \"$latest_snapshot_source\" 2>>/tmp/zfs-replication.err | iomon \"$LOCKFILE\" 10 | mbuffer -q -r \"$RATE\" -m \"$BUF\" 2>>/tmp/zfs-replication.err | zstd 2>>/tmp/zfs-replication.err | $remote_shell -o ConnectTimeout=\"$ssh_t\" \"zstd -d | zfs recv $recv_args $remote_ds\" 2>>/tmp/zfs-replication.err"
+        timeout "$timeout_val" bash -c "set -o pipefail; zfs send $send_args \"$latest_snapshot_source\" 2>>/tmp/zfs-replication.err | iomon \"${LOCKFILE:-/tmp/zeplicator-default.lock}\" 1 | mbuffer -q -r \"$RATE\" -m \"$BUF\" 2>>/tmp/zfs-replication.err | zstd 2>>/tmp/zfs-replication.err | $remote_shell -o ConnectTimeout=\"$ssh_t\" \"zstd -d | zfs recv $recv_args $remote_ds\" 2>>/tmp/zfs-replication.err"
         local status=$?
         set +o pipefail
         if [[ $status -ne 0 ]]; then
