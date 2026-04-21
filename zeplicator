@@ -499,7 +499,13 @@ for hop_node in "${NODES_REMAINING[@]}"; do
         echo "${CHAIN_PREFIX}  ✅ Replication to $HOP_TARGET successful."
         TRANSFER_DONE=true
     elif [[ $ZBUD_STATUS -eq 2 ]]; then
-        die "🚨 FATAL: Split-Brain detected on $hop_node. Aborting entire replication job for safety." 2
+        if [[ "$REPL_POLICY" == "resilience" ]]; then
+            echo "${CHAIN_PREFIX}  🚨 FATAL: Split-Brain detected on $hop_node. Skipping due to policy=resilience..."
+            TRANSFER_DONE=false
+            continue
+        else
+            die "🚨 FATAL: Split-Brain detected on $hop_node. Aborting entire replication job for safety." 2
+        fi
     else
         echo "${CHAIN_PREFIX}  ⚠️  WARNING: Local replication to $hop_node failed. Searching chain for a better donor..."
         
@@ -559,7 +565,13 @@ for hop_node in "${NODES_REMAINING[@]}"; do
 
             if [[ $SSH_STATUS -eq 2 ]]; then
                 echo "$DOWNSTREAM_OUT" | grep -v "^SENT_LIST:"
-                die "🚨 FATAL: Split-Brain detected downstream from $hop_node. Aborting entire replication job." 2
+                if [[ "$REPL_POLICY" == "resilience" ]]; then
+                    echo "${CHAIN_PREFIX}  ⚠️  WARNING: Split-Brain detected downstream from $hop_node. Continuing due to policy=resilience..."
+                    # We continue the outer loop to the next hop_node
+                    continue
+                else
+                    die "🚨 FATAL: Split-Brain detected downstream from $hop_node. Aborting entire replication job." 2
+                fi
             fi
 
             echo "$DOWNSTREAM_OUT" | grep -v "^SENT_LIST:"
