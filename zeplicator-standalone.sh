@@ -1,6 +1,6 @@
 #!/bin/bash
 # zeplicator-standalone.sh - Compiled ZFS Replication Manager
-# Built on: Mon Apr 20 20:15:23 EDT 2026
+# Built on: Mon Apr 20 20:30:45 EDT 2026
 
 # --- BEGIN zfs-common.lib.sh ---
 
@@ -694,7 +694,7 @@ zfsbud_core() {
           send_initial "$remote_ds" || return 1
        else
           zbud_warn "No common snapshots for $local_ds. Use -i for initial."
-          continue
+          return 1
        fi
     else
        # CHECK DATA DIVERGENCE (Split-Brain Safety Check)
@@ -1287,9 +1287,11 @@ for hop_node in "${NODES_REMAINING[@]}"; do
                 echo "${CHAIN_PREFIX}  ✅ VERIFICATION SUCCESS: Snapshot $LATEST_SNAP confirmed reaching a sink node."
             else
                 echo "${CHAIN_PREFIX}  ⚠️  WARNING: Verification FAILED. Snapshot $LATEST_SNAP not confirmed at end of chain, but transfer to $hop_node succeeded."
+                REPLICATION_SUCCESS=false
             fi
         else
             echo "${CHAIN_PREFIX}  ⚠️  WARNING: Downstream cascade from $hop_node failed (Code: $SSH_STATUS)."
+            REPLICATION_SUCCESS=false
         fi
         break
     else
