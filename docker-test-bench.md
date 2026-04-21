@@ -116,3 +116,26 @@ while true; do date >> /node1-pool/data1/test.txt; sleep 1; done
 *   **The Problem:** Since Docker containers share the host kernel, every container could "see" all three ZFS pools in `zpool list`. The script's original snapshot discovery used global `grep` commands, causing `node1` to accidentally find and attempt to process snapshots belonging to `node2`.
 *   **The Fix:** Updated all discovery logic to use explicit recursive scoping (`zfs list -r <dataset>`) to ensure nodes only see their own intended data.
 
+---
+
+## 3. Simulating Network Partitions & Split-Brain
+To test resilience and healing logic, you can simulate a node going offline or a network partition.
+
+### Isolate a Node (Simulate Offline)
+Disconnect a container from the default bridge network:
+```bash
+# Disconnect node2
+docker network disconnect bridge node2
+```
+
+### Test Split-Brain Recovery
+This scenario assumes **node2** was the original Master.
+
+1.  **Isolate Node 2 (Original Master):** `docker network disconnect bridge node2` (Simulates failure).
+2.  **Elect New Master (Node 1):** On node1, run `zeplicator ... --promote --auto -y`. This configures node1 as Master and node3 as a downstream sink.
+3.  **Diverge Data:** Write unique files to `/node1-pool/data1/` and run replication on node1 to sync Node 1 -> Node 3.
+4.  **Reconnect Node 2:** `docker network connect bridge node2` (The "Ghost Master" returns).
+5.  **Observe Blocked Push:** Run `zeplicator` on node2. It still thinks it is Master, but it will detect that node1/node3 have divergent data and abort with **Exit Code 2** instead of overwriting them.
+6.  **Heal the Chain:** Run `zeplicator ... --promote --auto -y` on node1 to force-realign node2 back into the new chain.
+
+
