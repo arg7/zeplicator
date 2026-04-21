@@ -1,6 +1,6 @@
 #!/bin/bash
 # zeplicator-standalone.sh - Compiled ZFS Replication Manager
-# Built on: Tue Apr 21 03:49:55 PM CEST 2026
+# Built on: Tue Apr 21 03:55:12 PM CEST 2026
 
 # --- BEGIN zfs-common.lib.sh ---
 
@@ -261,6 +261,15 @@ check_stuck_job() {
     while [[ -f "$LOCKFILE" ]]; do
         local lock_pid=$(cat "$LOCKFILE" 2>/dev/null)
         
+        # Self-healing: Check if the PID is actually running
+        if [[ -n "$lock_pid" ]]; then
+            if ! kill -0 "$lock_pid" 2>/dev/null; then
+                zbud_msg "  ⚠️  Stale lock detected (PID $lock_pid is not running). Cleaning up..."
+                rm -f "$LOCKFILE"
+                continue
+            fi
+        fi
+
         if [[ "$wait_for_lock" == true ]]; then
             if [[ $waited -ge $timeout_val ]]; then
                 die "ERR: Timeout waiting for lock $LOCKFILE after $timeout_val seconds. Lock held by PID: $lock_pid"
