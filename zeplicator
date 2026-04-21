@@ -279,10 +279,9 @@ if [[ "$SUSPEND" == true || "$RESUME" == true ]]; then
     for n in "${nodes[@]}"; do
         n_fqdn=$(resolve_node_fqdn "$n" "$local_ds")
         n_user=$(resolve_node_user "$n" "$local_ds")
-        n_pool=$(resolve_node_pool "$n" "$local_ds")
-        
+        n_ds=$(resolve_node_dataset "$n" "$local_ds")
         echo "    ⏳ Setting repl:suspend=$VAL on $n ($n_fqdn)..."
-        ssh "${n_user}@${n_fqdn}" "zfs set repl:suspend=$VAL ${n_pool}/${ds_name}" || echo "  Warning: Failed to set property on $n"
+        ssh "${n_user}@${n_fqdn}" "zfs set repl:suspend=$VAL ${n_ds}" || echo "  Warning: Failed to set property on $n"
     done
     
     send_smtp_alert "NOTICE: ZFS Replication has been ${ACTION} for dataset $raw_dataset on $my_hostname. Master node: ${nodes[0]}. New state: repl:suspend=$VAL"
