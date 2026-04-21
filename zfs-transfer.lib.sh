@@ -337,27 +337,19 @@ zfsbud_core() {
            return 2
        fi
 
-       # RESOLVE SNAPSHOT DIVERGENCE: Rollback receiver to the common snapshot ONLY if there are newer snapshots
+       # RESOLVE SNAPSHOT DIVERGENCE:
+       # If there are newer snapshots on destination but NO data divergence was detected above,
+       # it means these snapshots are just points on the same timeline (e.g. auto-snapshots).
+       # 'zfs recv -F' will handle them. We only roll back if we absolutely must or if 
+       # it's a known diverged state (but we handle split-brain separately above).
+       
        local latest_dest_snap=$(echo "${destination_snapshots[-1]}" | awk '{print $1}')
        if [[ "$latest_dest_snap" != *"$last_snapshot_common" ]]; then
-           zbud_msg "Divergence detected. Rolling back $remote_ds to $last_snapshot_common. Offending snapshots:"
-           
-           # Print offending snapshots that are about to be destroyed
-           local found_common=false
-           for dest_line in "${destination_snapshots[@]}"; do
-               local dest_s=$(echo "$dest_line" | awk '{print $1}')
-               if [[ "$found_common" == true ]]; then
-                   zbud_msg "  ❌ $dest_s"
-               elif [[ "$dest_s" == *"$last_snapshot_common" ]]; then
-                   found_common=true
-               fi
-           done
-           
-           if [ -n "$remote_shell" ]; then
-             $remote_shell "zfs rollback -r $remote_ds@$last_snapshot_common" || return 1
-           else
-             zfs rollback -r "$remote_ds@$last_snapshot_common" || return 1
-           fi
+           # Instead of pre-emptive rollback, we'll let 'zfs recv -F' handle it.
+           # However, we should check if the LATEST destination snapshot is actually
+           # a descendant of the common snapshot (which zfs diff @common . already confirmed by being empty).
+           zbud_msg "  ℹ️  Destination has newer snapshots (e.g. ${latest_dest_snap#*@}), but no data divergence."
+           zbud_msg "  ℹ️  Using 'zfs recv -F' to sync."
        fi
        send_incremental "$remote_ds" || return 1
     fi
