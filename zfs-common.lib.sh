@@ -87,29 +87,27 @@ resolve_node_pool() {
     local alias=$1
     local ds_raw=$2
     local pool=""
-    local my_alias=$(get_local_alias "$ds_raw" "") # Rely on auto-discovery here if ME is not in scope
+    local my_alias=$(get_local_alias "$ds_raw" "")
     
+    local fqdn=$(resolve_node_fqdn "$alias" "$ds_raw")
+    local user=$(resolve_node_user "$alias" "$ds_raw")
+
     # Pre-flight check: Is node reachable?
     if [[ "$alias" != "$my_alias" ]]; then
-        local fqdn=$(resolve_node_fqdn "$alias" "$ds_raw")
-        local user=$(resolve_node_user "$alias" "$ds_raw")
         if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "${user}@${fqdn}" "true" 2>/dev/null; then
             return 255
         fi
     fi
 
-    # 1. Check namespaced property: repl:node:<alias>:fs
-    pool=$(get_zfs_prop "repl:node:${alias}:fs" "$ds_raw")
-    
-    # 2. Check local properties if we are on that node (fallback search)
-    if [[ -z "$pool" && "$alias" == "$my_alias" ]]; then
-        pool=$(get_zfs_prop "repl:node:${alias}:fs" "${alias}-pool/${ds_raw#*/}")
+    # Try to get pool from the node itself
+    if [[ "$alias" == "$my_alias" ]]; then
+        pool=$(get_zfs_prop "repl:node:${alias}:fs" "$ds_raw")
+    else
+        pool=$(ssh "${user}@${fqdn}" "zfs get -H -o value repl:node:${alias}:fs $ds_raw 2>/dev/null | grep -v '^-' | head -n 1")
     fi
     
     if [[ -z "$pool" ]]; then
         # Fallback 1: try generic 'pool'
-        local fqdn=$(resolve_node_fqdn "$alias" "$ds_raw")
-        local user=$(resolve_node_user "$alias" "$ds_raw")
         if [[ "$alias" == "$my_alias" ]]; then
             if zfs list pool >/dev/null 2>&1; then pool="pool"; fi
         else
@@ -173,17 +171,15 @@ die() {
     local msg="$*"
     zbud_msg "❌ ERROR: $msg"
 
-    if [[ -n "$dataset" ]]; then
+    if [[ -n "$local_ds" ]]; then
         if type send_smtp_alert >/dev/null 2>&1; then
-            # We don't want to infinite loop if send_smtp_alert calls die
-            # But here we just call it once.
             send_smtp_alert "ERROR: $msg"
         fi
     fi
     echo "HINT: If replication failed due to divergent snapshots, try recovery options:"
-    echo "  --promote --auto [-y]         (Auto-discover latest common snapshot and rollback chain)"
-    echo "  --promote --snap <name> [-y]  (Rollback chain to specific snapshot)"
-    echo "  --promote --destroy-chain     (DANGER: Destroy downstream datasets and start over)"
+    echo "  --promote --auto [-y]         (Auto-discover latest common snapshot and rollback chain)
+  --promote --snap <name> [-y]  (Rollback chain to specific snapshot)
+  --promote --destroy-chain     (DANGER: Destroy downstream datasets and start over)"
     exit 1
 }
 

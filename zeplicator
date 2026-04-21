@@ -348,7 +348,9 @@ fi
 # Identity & Configuration Discovery
 REPL_CHAIN=$(get_zfs_prop "repl:chain" "$local_ds")
 REPL_USER=$(get_zfs_prop "repl:user" "$local_ds")
+REPL_POLICY=$(get_zfs_prop "repl:policy" "$local_ds")
 [[ -z "$REPL_USER" ]] && REPL_USER="root"
+[[ -z "$REPL_POLICY" || "$REPL_POLICY" == "-" ]] && REPL_POLICY="fail"
 
 [[ -n "$raw_dataset" ]] || die "dataset not specified"
 ME=$(get_local_alias "$local_ds" "$CLI_ALIAS")
@@ -439,9 +441,13 @@ check_stuck_job
 if [[ "$IS_MASTER" == true && "$CASCADED" == false && "$PROMOTE" == false && -z "$TARGET_NODE" && "$IS_DONOR" == false ]]; then
     timestamp=$(date -u +%Y-%m-%d-%H%M)
     snap_name="${local_ds}@zeplicator_${label}-${timestamp}"
-    echo "${CHAIN_PREFIX}  ⏳ Creating snapshot: $snap_name"
-    zfs snapshot "$snap_name" 2>&1 | indent_output
-    [[ ${PIPESTATUS[0]} -eq 0 ]] || die "ERR: snapshot creation failed"
+    if zfs list -t snap "$snap_name" >/dev/null 2>&1; then
+        echo "${CHAIN_PREFIX}  ⏳ Snapshot $snap_name already exists. Reusing..."
+    else
+        echo "${CHAIN_PREFIX}  ⏳ Creating snapshot: $snap_name"
+        zfs snapshot "$snap_name" 2>&1 | indent_output
+        [[ ${PIPESTATUS[0]} -eq 0 ]] || die "ERR: snapshot creation failed"
+    fi
 else
     if [[ "$IS_DONOR" == true ]]; then
         echo "${CHAIN_PREFIX}  ℹ️  Node $ME is acting as Donor. Skipping snapshot creation."
@@ -466,8 +472,12 @@ for hop_node in "${NODES_REMAINING[@]}"; do
     echo "${CHAIN_PREFIX}  🔍 Checking connectivity to $hop_node ($hop_fqdn)..."
     NEXT_HOP_POOL=$(resolve_node_pool "$hop_node" "$raw_dataset")
     if [[ $? -eq 255 ]]; then
-        echo "${CHAIN_PREFIX}  ❌ ERROR: Node $hop_node is unreachable (Pre-flight). Skipping..."
-        continue
+        if [[ "$REPL_POLICY" == "resilience" ]]; then
+            echo "${CHAIN_PREFIX}  ⚠️  WARNING: Node $hop_node is unreachable (Pre-flight). Skipping due to policy=resilience..."
+            continue
+        else
+            die "Node $hop_node is unreachable (Pre-flight). Aborting due to policy=fail."
+        fi
     fi
     
     echo "${CHAIN_PREFIX}  🚀 Attempting replication: $local_ds -> $HOP_TARGET (Pool: $NEXT_HOP_POOL)..."
@@ -498,6 +508,10 @@ for hop_node in "${NODES_REMAINING[@]}"; do
         fi
     fi
 
+    if [[ "$TRANSFER_DONE" == false && "$REPL_POLICY" == "fail" ]]; then
+        die "Replication to $hop_node failed and no alternative donors succeeded. Aborting due to policy=fail."
+    fi
+
     if [[ "$TRANSFER_DONE" == true ]]; then
         REPLICATION_SUCCESS=true
         
@@ -516,20 +530,29 @@ for hop_node in "${NODES_REMAINING[@]}"; do
         
         echo "$DOWNSTREAM_OUT" | grep -v "^SENT_LIST:"
         
+        CASCADE_VERIFIED=false
         if [[ $SSH_STATUS -eq 0 ]]; then
             ARRIVED_LIST=$(echo "$DOWNSTREAM_OUT" | grep "^SENT_LIST:" | cut -d':' -f2)
             
             if [[ -n "$LATEST_SNAP" && ",$ARRIVED_LIST," == *",$LATEST_SNAP,"* ]]; then
                 echo "${CHAIN_PREFIX}  ✅ VERIFICATION SUCCESS: Snapshot $LATEST_SNAP confirmed reaching a sink node."
+                CASCADE_VERIFIED=true
             else
                 echo "${CHAIN_PREFIX}  ⚠️  WARNING: Verification FAILED. Snapshot $LATEST_SNAP not confirmed at end of chain, but transfer to $hop_node succeeded."
-                REPLICATION_SUCCESS=false
             fi
         else
             echo "${CHAIN_PREFIX}  ⚠️  WARNING: Downstream cascade from $hop_node failed (Code: $SSH_STATUS)."
-            REPLICATION_SUCCESS=false
         fi
-        break
+
+        if [[ "$CASCADE_VERIFIED" == true ]]; then
+            REPLICATION_SUCCESS=true
+            break
+        elif [[ "$REPL_POLICY" == "fail" ]]; then
+            die "Downstream verification/cascade failed for $hop_node. Aborting due to policy=fail."
+        else
+            echo "${CHAIN_PREFIX}  ⚠️  Continuing to next hop in chain due to policy=resilience..."
+            REPLICATION_SUCCESS=true # We still count the local transfer as a partial success for shipped marking
+        fi
     else
         echo "${CHAIN_PREFIX}  ❌ ERROR: Replication to $hop_node failed. Skipping to next available node in chain..."
     fi
