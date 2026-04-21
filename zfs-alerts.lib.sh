@@ -4,13 +4,13 @@
 
 send_smtp_alert() {
     local msg=$1
-    local host=$(get_zfs_prop "repl:smtp_host" "$dataset")
-    local port=$(get_zfs_prop "repl:smtp_port" "$dataset")
-    local user=$(get_zfs_prop "repl:smtp_user" "$dataset")
-    local pass=$(get_zfs_prop "repl:smtp_password" "$dataset")
-    local from=$(get_zfs_prop "repl:smtp_from" "$dataset")
-    local to=$(get_zfs_prop "repl:smtp_to" "$dataset")
-    local proto=$(get_zfs_prop "repl:smtp_protocol" "$dataset")
+    local host=$(get_zfs_prop "zep:smtp_host" "$dataset")
+    local port=$(get_zfs_prop "zep:smtp_port" "$dataset")
+    local user=$(get_zfs_prop "zep:smtp_user" "$dataset")
+    local pass=$(get_zfs_prop "zep:smtp_password" "$dataset")
+    local from=$(get_zfs_prop "zep:smtp_from" "$dataset")
+    local to=$(get_zfs_prop "zep:smtp_to" "$dataset")
+    local proto=$(get_zfs_prop "zep:smtp_protocol" "$dataset")
     
     [[ -z "$host" || -z "$to" ]] && return
 

@@ -24,7 +24,7 @@ get_local_alias() {
     # zbud_msg "  🧪 DEBUG: get_local_alias(ds=$raw_ds, cli=$cli_alias). sys_host=$sys_host"
     
     # Try to read the chain from the dataset
-    local chain=$(get_zfs_prop "repl:chain" "$raw_ds")
+    local chain=$(get_zfs_prop "zep:chain" "$raw_ds")
     
     if [[ -z "$chain" ]]; then
         # Cannot read chain, fallback to hostname
@@ -47,7 +47,7 @@ get_local_alias() {
     local local_ips=$(hostname -I 2>/dev/null || ip -4 addr show 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
     # zbud_msg "  🧪 DEBUG: local_ips='$local_ips'"
     for n in "${nodes[@]}"; do
-        local n_fqdn=$(get_zfs_prop "repl:node:${n}:fqdn" "$raw_ds")
+        local n_fqdn=$(get_zfs_prop "zep:node:${n}:fqdn" "$raw_ds")
         # zbud_msg "  🧪 DEBUG: Checking node '$n' with fqdn '$n_fqdn'"
         if [[ -n "$n_fqdn" && "$n_fqdn" != "-" ]]; then
             # Direct string match with local IPs
@@ -72,7 +72,7 @@ get_local_alias() {
 resolve_node_fqdn() {
     local alias=$1
     local ds_raw=$2
-    local fqdn=$(get_zfs_prop "repl:node:${alias}:fqdn" "$ds_raw")
+    local fqdn=$(get_zfs_prop "zep:node:${alias}:fqdn" "$ds_raw")
     [[ -z "$fqdn" || "$fqdn" == "-" ]] && echo "$alias" || echo "$fqdn"
 }
 
@@ -80,9 +80,9 @@ resolve_node_fqdn() {
 resolve_node_user() {
     local alias=$1
     local ds_raw=$2
-    local user=$(get_zfs_prop "repl:node:${alias}:user" "$ds_raw")
+    local user=$(get_zfs_prop "zep:node:${alias}:user" "$ds_raw")
     if [[ -z "$user" || "$user" == "-" ]]; then
-        user=$(get_zfs_prop "repl:user" "$ds_raw")
+        user=$(get_zfs_prop "zep:user" "$ds_raw")
     fi
     [[ -z "$user" || "$user" == "-" ]] && echo "root" || echo "$user"
 }
@@ -90,14 +90,14 @@ resolve_node_user() {
 # Resolve SSH timeout (default 10s)
 resolve_ssh_timeout() {
     local ds_raw=$1
-    local t=$(get_zfs_prop "repl:ssh:timeout" "$ds_raw")
+    local t=$(get_zfs_prop "zep:ssh:timeout" "$ds_raw")
     [[ -z "$t" || "$t" == "-" ]] && echo "10" || echo "$t"
 }
 
 # Resolve process timeout (default 3600s)
 resolve_proc_timeout() {
     local ds_raw=$1
-    local t=$(get_zfs_prop "repl:proc:timeout" "$ds_raw")
+    local t=$(get_zfs_prop "zep:proc:timeout" "$ds_raw")
     [[ -z "$t" || "$t" == "-" ]] && echo "3600" || echo "$t"
 }
 
@@ -131,9 +131,9 @@ resolve_node_pool() {
 
     # Try to get pool from the node itself
     if [[ "$alias" == "$my_alias" ]]; then
-        pool=$(get_zfs_prop "repl:node:${alias}:fs" "$ds_raw")
+        pool=$(get_zfs_prop "zep:node:${alias}:fs" "$ds_raw")
     else
-        pool=$(timeout "$((ssh_t + 5))" ssh -o ConnectTimeout="$ssh_t" "${user}@${fqdn}" "zfs get -H -o value repl:node:${alias}:fs $ds_raw 2>/dev/null | grep -v '^-' | head -n 1")
+        pool=$(timeout "$((ssh_t + 5))" ssh -o ConnectTimeout="$ssh_t" "${user}@${fqdn}" "zfs get -H -o value zep:node:${alias}:fs $ds_raw 2>/dev/null | grep -v '^-' | head -n 1")
     fi
     
     if [[ -z "$pool" ]]; then
@@ -165,8 +165,8 @@ resolve_node_dataset() {
 
 get_repl_props_encoded() {
     local ds=$1
-    # Get all repl: properties, filter out node-specific ones like alias and suspend
-    local props=$(zfs get all -H -o property,value "$ds" | grep "^repl:" | grep -vE "repl:(alias|suspend)" | awk '{print $1"="$2}' | tr '\n' ';')
+    # Get all zep: properties, filter out node-specific ones like alias and suspend
+    local props=$(zfs get all -H -o property,value "$ds" | grep "^zep:" | grep -vE "zep:(alias|suspend)" | awk '{print $1"="$2}' | tr '\n' ';')
     echo -n "$props" | base64 -w 0
 }
 

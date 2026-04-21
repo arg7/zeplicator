@@ -14,11 +14,11 @@ resolve_retention() {
     
     local val=""
     
-    # 1. Host-specific: repl:node:${ME}:keep:${lbl}
-    val=$(get_zfs_prop "repl:node:${ME}:keep:${lbl}" "$ds")
+    # 1. Host-specific: zep:node:${ME}:keep:${lbl}
+    val=$(get_zfs_prop "zep:node:${ME}:keep:${lbl}" "$ds")
 
-    # 2. Role-specific: repl:role:<role>:keep:<label>
-    [[ -z "$val" || "$val" == "-" ]] && val=$(get_zfs_prop "repl:role:${role}:keep:${lbl}" "$ds")
+    # 2. Role-specific: zep:role:<role>:keep:<label>
+    [[ -z "$val" || "$val" == "-" ]] && val=$(get_zfs_prop "zep:role:${role}:keep:${lbl}" "$ds")
 
     # 3. Final Fallback
     [[ -z "$val" || "$val" == "-" ]] && val="$fallback"
@@ -44,7 +44,7 @@ resolve_retention() {
     echo "${CHAIN_PREFIX}  🔄 Performing shipped-aware rotation for $ds (label: $lbl, keep: $k_count)..."
     
     # Get snapshots matching label, sorted by creation date (newest first)
-    mapfile -t snaps < <(zfs list -t snap -H -o name,zfs-send:shipped -S creation -r "$ds" | grep "@.*$lbl")
+    mapfile -t snaps < <(zfs list -t snap -H -o name,zep:shipped -S creation -r "$ds" | grep "@.*$lbl")
     
     if [[ "$DRY_RUN" == true ]]; then
         # Inject virtual snapshots to simulate accurate count
@@ -87,7 +87,7 @@ resolve_retention() {
         
         # Check if shipped
         local is_shipped=false
-        if [[ "$line" == *"zfs-send:shipped"* ]]; then
+        if [[ "$line" == *"zep:shipped"* ]]; then
             is_shipped=true
         elif [[ -n "$shipped_val" && "$shipped_val" != "-" ]]; then
             is_shipped=true

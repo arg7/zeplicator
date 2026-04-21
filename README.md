@@ -10,7 +10,7 @@ A robust, cascading ZFS replication script designed for multi-node chains. It ha
 - **Visual Progress & Icons**: Rich CLI output with status icons (✅, ❌, 🔗) and a final success/partial-success summary for complex operations like promotion.
 - **Cascading Replication**: Automatically triggers replication on the next hop in the chain once the local transfer is verified.
 - **End-to-End Verification**: Confirms the arrival of the specific snapshot at the final sink before marking local snapshots as "shipped".
-- **Automatic Configuration Sync**: All `repl:*` properties (retention, SMTP, chain order) are automatically propagated from the master to all downstream nodes during replication.
+- **Automatic Configuration Sync**: All `zep:*` properties (retention, SMTP, chain order) are automatically propagated from the master to all downstream nodes during replication.
 - **Safe Master Promotion**: Promote any node to Master using the `--promote` flag. Support for automatic chain-wide consistency checks and rollbacks.
 - **Pause & Resume**: Use `--suspend` and `--resume` to globally pause Master operations.
 - **Cron Safety**: The script can be configured in cron on **all nodes**. Only the current Master will initiate replication.
@@ -45,35 +45,35 @@ The following packages must be installed on all nodes:
    Ensure **Full Mesh** SSH connectivity between all nodes. Use `ssh-keyscan` and distribute public keys to all `authorized_keys`.
 
 3. **ZFS Properties**:
-   Configure the Master node's dataset. All properties prefixed with `repl:` are automatically synced across the chain.
+   Configure the Master node's dataset. All properties prefixed with `zep:` are automatically synced across the chain.
 
-## Configuration Properties (`repl:*`)
+## Configuration Properties (`zep:*`)
 
 | Property | Description | Example |
 | :--- | :--- | :--- |
-| `repl:chain` | **(Required)** Comma-separated list of host aliases. | `node1,node2,node3` |
-| `repl:node:<alias>:fs` | Physical dataset path for a specific host alias. | `repl:node:node1:fs=tank/data` |
-| `repl:node:<alias>:fqdn` | Real address/FQDN for a host alias. | `repl:node:node1:fqdn=10.0.0.5` |
-| `repl:node:<alias>:user` | SSH user for a host alias. | `repl:node:node1:user=repluser` |
-| `repl:node:<alias>:keep:<label>` | Host-specific retention. | `repl:node:node1:keep:min1=30` |
-| `repl:role:<role>:keep:<label>` | Role-based retention (`master`, `middle`, `sink`). | `repl:role:sink:keep:min1=90` |
-| `repl:user` | **(Global)** Fallback SSH user. | `root` |
-| `repl:zfs:raw` | Whether to use `zfs send -w` (raw, includes properties). Default: `false`. | `true` |
-| `repl:zfs:resume` | Whether to use `zfs recv -s` (resume support). Default: `false`. | `true` |
-| `repl:zfs:force` | If `false`, omits `-F` from `zfs receive` (Safe Mode). Default: `true`. | `false` |
+| `zep:chain` | **(Required)** Comma-separated list of host aliases. | `node1,node2,node3` |
+| `zep:node:<alias>:fs` | Physical dataset path for a specific host alias. | `zep:node:node1:fs=tank/data` |
+| `zep:node:<alias>:fqdn` | Real address/FQDN for a host alias. | `zep:node:node1:fqdn=10.0.0.5` |
+| `zep:node:<alias>:user` | SSH user for a host alias. | `zep:node:node1:user=repluser` |
+| `zep:node:<alias>:keep:<label>` | Host-specific retention. | `zep:node:node1:keep:min1=30` |
+| `zep:role:<role>:keep:<label>` | Role-based retention (`master`, `middle`, `sink`). | `zep:role:sink:keep:min1=90` |
+| `zep:user` | **(Global)** Fallback SSH user. | `root` |
+| `zep:zfs:raw` | Whether to use `zfs send -w` (raw, includes properties). Default: `false`. | `true` |
+| `zep:zfs:resume` | Whether to use `zfs recv -s` (resume support). Default: `false`. | `true` |
+| `zep:zfs:force` | If `false`, omits `-F` from `zfs receive` (Safe Mode). Default: `true`. | `false` |
 
 ### Configuration Management (`--config`)
 
-Zep provides a built-in configuration engine to manage `repl:*` ZFS properties without needing to call `zfs set` manually. It supports shorthand prefixes for common settings.
+Zep provides a built-in configuration engine to manage `zep:*` ZFS properties without needing to call `zfs set` manually. It supports shorthand prefixes for common settings.
 
 #### Available Subcommands:
 
 | Subcommand | Description |
 | :--- | :--- |
-| `--list` | (Default) Lists all `repl:` properties currently set on the dataset. |
+| `--list` | (Default) Lists all `zep:` properties currently set on the dataset. |
 | `key=value` | Sets a property. Supports shorthands like `smtp:host=...` or `node:n1:fqdn=...`. |
 | `--clear <key>` | Inherits/removes a specific property from the dataset. |
-| `--export <file>`| Saves all `repl:` properties to a plain-text file. |
+| `--export <file>`| Saves all `zep:` properties to a plain-text file. |
 | `--import <file>`| Loads and sets properties from a file. Supports comments and shorthands. |
 
 #### Usage Examples:
@@ -85,9 +85,9 @@ zep pool/mydata --config  # or --config --list
 
 **2. Setting Properties (with Shorthands)**
 Shorthands automatically expand to their full ZFS property names:
-- `smtp:host=mail.com` $\rightarrow$ `repl:smtp_host=mail.com`
-- `node:n1:fqdn=10.0.0.1` $\rightarrow$ `repl:node:n1:fqdn=10.0.0.1`
-- `role:sink:keep:min1=90` $\rightarrow$ `repl:role:sink:keep:min1=90`
+- `smtp:host=mail.com` $\rightarrow$ `zep:smtp_host=mail.com`
+- `node:n1:fqdn=10.0.0.1` $\rightarrow$ `zep:node:n1:fqdn=10.0.0.1`
+- `role:sink:keep:min1=90` $\rightarrow$ `zep:role:sink:keep:min1=90`
 
 ```bash
 zep pool/mydata --config smtp:host=smtp.gmail.com smtp:port=587 node:node1:user=repl

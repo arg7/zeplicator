@@ -209,8 +209,8 @@ zfsbud_core() {
     local ssh_t=$(resolve_ssh_timeout "$dataset")
 
     # Configure flags based on properties
-    local use_raw=$(get_zfs_prop "repl:zfs:raw" "$dataset")
-    local use_resume=$(get_zfs_prop "repl:zfs:resume" "$dataset")
+    local use_raw=$(get_zfs_prop "zep:zfs:raw" "$dataset")
+    local use_resume=$(get_zfs_prop "zep:zfs:resume" "$dataset")
     
     local send_args="-R"
     local recv_args="-u"
@@ -262,8 +262,8 @@ zfsbud_core() {
     local ssh_t=$(resolve_ssh_timeout "$dataset")
 
     # Configure flags based on properties
-    local use_raw=$(get_zfs_prop "repl:zfs:raw" "$dataset")
-    local use_resume=$(get_zfs_prop "repl:zfs:resume" "$dataset")
+    local use_raw=$(get_zfs_prop "zep:zfs:raw" "$dataset")
+    local use_resume=$(get_zfs_prop "zep:zfs:resume" "$dataset")
     
     local send_args="-p $recursive_send -i \"$local_ds@$last_snapshot_common\""
     local recv_args="-u"
@@ -292,7 +292,7 @@ zfsbud_core() {
         ! timeout "$timeout_val" bash -c "zfs send $send_args \"$latest_snapshot_source\" 2>>/tmp/zfs-replication.err | zfs recv $recv_args \"$remote_ds\" 2>>/tmp/zfs-replication.err" && return 1
       fi
 
-      local delay=$(get_zfs_prop "repl:debug:send_delay" "$local_ds")
+      local delay=$(get_zfs_prop "zep:debug:send_delay" "$local_ds")
       if [[ -n "$delay" && "$delay" -gt 0 ]]; then
         zbud_msg "  🧪 DEBUG: Sleeping for ${delay}s after zfs send (Incremental)..."
         sleep "$delay"
@@ -315,7 +315,7 @@ zfsbud_core() {
     
     zbud_msg "  📦 Processing $local_ds -> ${destination_parent_dataset} (Target: ${remote_ds})"
     
-    REPL_FORCE=$(get_zfs_prop "repl:zfs:force" "$dataset")
+    REPL_FORCE=$(get_zfs_prop "zep:zfs:force" "$dataset")
 
     set_source_snapshots "$local_ds"
     if ((${#source_snapshots[@]} < 1)); then
