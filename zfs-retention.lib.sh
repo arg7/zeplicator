@@ -48,18 +48,27 @@ resolve_retention() {
     
     if [[ "$DRY_RUN" == true ]]; then
         # Inject virtual snapshots to simulate accurate count
-        local v_count=0
         if [[ -n "$VIRTUAL_SNAP_CREATED" && "$VIRTUAL_SNAP_CREATED" == *"$lbl"* ]]; then
-            # Prepend local virtual snap (it is the newest)
-            snaps=("${ds}@${VIRTUAL_SNAP_CREATED} zfs-send:shipped=true" "${snaps[@]}")
+            local v_name="${ds}@${VIRTUAL_SNAP_CREATED}"
+            local already_exists=false
+            for s in "${snaps[@]}"; do [[ "$s" == "$v_name"* ]] && already_exists=true && break; done
+            
+            if [[ "$already_exists" == false ]]; then
+                snaps=("$v_name	true" "${snaps[@]}")
+            fi
         fi
         
         if [[ -n "$VIRTUAL_SNAPS_INCOMING" ]]; then
             IFS=',' read -ra v_incoming <<< "$VIRTUAL_SNAPS_INCOMING"
             for v in "${v_incoming[@]}"; do
                 if [[ "$v" == *"$lbl"* ]]; then
-                   # These are also "new" from upstream
-                   snaps=("${ds}@${v} zfs-send:shipped=true" "${snaps[@]}")
+                   local v_name="${ds}@${v}"
+                   local already_exists=false
+                   for s in "${snaps[@]}"; do [[ "$s" == "$v_name"* ]] && already_exists=true && break; done
+                   
+                   if [[ "$already_exists" == false ]]; then
+                       snaps=("$v_name	true" "${snaps[@]}")
+                   fi
                 fi
             done
         fi
