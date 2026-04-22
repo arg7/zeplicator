@@ -3,7 +3,8 @@
 # zfs-alerts.lib.sh - Notification functions for Zeplicator
 
 send_smtp_alert() {
-    local msg=$1
+    local level=${1:-warn}
+    local msg=$2
     local host=$(get_zfs_prop "zep:smtp_host" "$dataset")
     local port=$(get_zfs_prop "zep:smtp_port" "$dataset")
     local user=$(get_zfs_prop "zep:smtp_user" "$dataset")
@@ -17,11 +18,9 @@ send_smtp_alert() {
     # --- Rate Limiting Logic ---
     local state_dir="/tmp/zfs-repl-alerts"
     mkdir -p "$state_dir"
-    # Use a safe filename for the dataset state
     local ds_safe="${dataset//\//-}"
     local state_file="${state_dir}/${ds_safe}.state"
-    # Hash the core message (excluding dynamic error details to group similar errors)
-    local msg_hash=$(echo -n "$msg" | md5sum | awk '{print $1}')
+    local msg_hash=$(echo -n "${level}:${msg}" | md5sum | awk '{print $1}')
     
     local last_sent=0
     local supp_count=0
@@ -34,10 +33,16 @@ send_smtp_alert() {
     fi
 
     local current_time=$(date +%s)
-    local threshold_str=$(get_zfs_prop "zep:alert:threshold" "$dataset")
-    local threshold=1800
+    local threshold_str=$(get_zfs_prop "zep:alert:${level}:threshold" "$dataset")
+    local threshold=0
     if [[ "$threshold_str" != "-" ]]; then
         threshold=$(parse_time_to_seconds "$threshold_str")
+    else
+        case "$level" in
+            critical) threshold=0 ;;
+            warn)     threshold=3600 ;;
+            info)     threshold=86400 ;;
+        esac
     fi
     local elapsed=$((current_time - last_sent))
 
@@ -48,7 +53,7 @@ send_smtp_alert() {
         touch "$state_file"
         sed -i "/^$msg_hash /d" "$state_file"
         echo "$msg_hash $last_sent $supp_count" >> "$state_file"
-        echo "    🔇 Alert suppressed (Rate Limit: ${elapsed}s < ${threshold}s). Count: $supp_count"
+        echo "    🔇 Alert suppressed (${level}: ${elapsed}s < ${threshold}s). Count: $supp_count"
         return
     fi
 

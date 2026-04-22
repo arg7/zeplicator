@@ -231,7 +231,7 @@ die() {
 
     if [[ -n "$local_ds" ]]; then
         if type send_smtp_alert >/dev/null 2>&1; then
-            send_smtp_alert "ERROR: $msg"
+            send_smtp_alert "critical" "ERROR: $msg"
         fi
     fi
     if [[ "$CASCADED" != true && "$exit_code" -eq 2 ]]; then
@@ -319,7 +319,7 @@ check_stuck_job() {
             fi
 
             if type send_smtp_alert >/dev/null 2>&1; then
-                send_smtp_alert "CRITICAL: ZFS replication job for $dataset ($label) is stuck. Lock file: $LOCKFILE. Age: $((age/60)) min. Timeout: $((timeout_val/60)) min. PID recorded: $lock_pid"
+                send_smtp_alert "critical" "CRITICAL: ZFS replication job for $dataset ($label) is stuck. Lock file: $LOCKFILE. Age: $((age/60)) min. Timeout: $((timeout_val/60)) min. PID recorded: $lock_pid"
             fi
             die "ERR: Stuck job detected ($age seconds old) at $LOCKFILE. Alert sent."
         else

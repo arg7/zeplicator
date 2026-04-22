@@ -284,7 +284,7 @@ if [[ "$SUSPEND" == true || "$RESUME" == true ]]; then
         ssh "${n_user}@${n_fqdn}" "zfs set zep:suspend=$VAL ${n_ds}" || echo "  Warning: Failed to set property on $n"
     done
     
-    send_smtp_alert "NOTICE: ZFS Replication has been ${ACTION} for dataset $raw_dataset on $my_hostname. Master node: ${nodes[0]}. New state: zep:suspend=$VAL"
+    send_smtp_alert "info" "NOTICE: ZFS Replication has been ${ACTION} for dataset $raw_dataset on $my_hostname. Master node: ${nodes[0]}. New state: zep:suspend=$VAL"
     exit 0
 fi
 
@@ -470,7 +470,7 @@ if [[ "$PROMOTE" == true ]]; then
             
             echo "  ✨ Updating local chain configuration..."
             zfs set zep:chain="$NEW_CHAIN" "$local_ds"
-            send_smtp_alert "NOTICE: Node $my_hostname has been PROMOTED to Master for dataset $raw_dataset. New chain: $NEW_CHAIN"
+            send_smtp_alert "info" "NOTICE: Node $my_hostname has been PROMOTED to Master for dataset $raw_dataset. New chain: $NEW_CHAIN"
 
             sync_promotion_props "$local_ds" "NEW_NODES"
             exit 0
@@ -481,7 +481,7 @@ if [[ "$PROMOTE" == true ]]; then
     if [[ "$PROMOTE" == true ]]; then
         echo "  ✨ Updating local chain configuration..."
         zfs set zep:chain="$NEW_CHAIN" "$local_ds"
-        send_smtp_alert "NOTICE: Node $my_hostname has been PROMOTED to Master for dataset $raw_dataset. New chain: $NEW_CHAIN"
+        send_smtp_alert "info" "NOTICE: Node $my_hostname has been PROMOTED to Master for dataset $raw_dataset. New chain: $NEW_CHAIN"
 
         sync_promotion_props "$local_ds" "NEW_NODES"
         exit 0
@@ -583,7 +583,7 @@ if [[ "$IS_MASTER" == false ]]; then
             
             # 5. If age exceeds threshold, alert
             if [[ $AGE_SEC -gt $HB_THRESHOLD_SEC ]]; then
-                send_smtp_alert "CRITICAL: Upstream chain silent for label '${label}' on '${local_ds}'. Latest snapshot '${LATEST_SNAP_NAME}' is $((AGE_SEC/60)) minutes old (threshold: ${HB_THRESHOLD_RAW})."
+                send_smtp_alert "critical" "CRITICAL: Upstream chain silent for label '${label}' on '${local_ds}'. Latest snapshot '${LATEST_SNAP_NAME}' is $((AGE_SEC/60)) minutes old (threshold: ${HB_THRESHOLD_RAW})."
             fi
         fi
     fi
@@ -752,7 +752,7 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
         REPLICATION_SUCCESS=true
         
         if [[ "$initial_send" == true ]]; then
-            send_smtp_alert "SUCCESS: Initial replication of $local_ds completed successfully to $hop_node ($HOP_TARGET)."
+            send_smtp_alert "info" "SUCCESS: Initial replication of $local_ds completed successfully to $hop_node ($HOP_TARGET)."
         fi
         
         CASCADE_VERIFIED=false
