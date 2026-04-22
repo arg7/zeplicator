@@ -2,7 +2,20 @@
 
 A robust, cascading ZFS replication script designed for multi-node chains. It handles snapshot creation, incremental transfers with resume support, and graduated retention across the entire chain.
 
-## Features
+## Heartbeat Monitoring
+
+Zep can monitor the freshness of upstream replication chains on middle and sink nodes. 
+
+If a dataset has the `zep:alert:heartbeat:<label>` property set (e.g., `zep:alert:heartbeat:frequently=1h`), the node will monitor the age of the latest snapshot with the matching label. If the latest snapshot is older than the configured threshold, Zep will trigger a `critical` alert via SMTP.
+
+Thresholds support time suffixes: `s` (seconds), `m` (minutes), `h` (hours), `d` (days), `M` (months), and `Y` (years).
+
+Example:
+```bash
+# Alert if upstream hasn't sent a 'frequently' snapshot in over 1 hour
+zfs set zep:alert:heartbeat:frequently=1h pool/data
+```
+
 
 - **Split-Brain Protection**: Automatically performs a `zfs diff` between the common base and the local dataset on the sink. Replication **aborts** with a critical alert if any local data changes are detected, preventing silent data loss.
 - **Intelligent Donor Discovery**: Downstream nodes can automatically discover and "pull" from any other node in the chain (not just their immediate parent) to find the best common snapshot, ensuring resilience even if multiple nodes are out of sync.
