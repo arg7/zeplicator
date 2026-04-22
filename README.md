@@ -74,6 +74,9 @@ The following packages must be installed on all nodes:
 | `zep:zfs:raw` | Whether to use `zfs send -w` (raw, includes properties). Default: `false`. | `true` |
 | `zep:zfs:resume` | Whether to use `zfs recv -s` (resume support). Default: `false`. | `true` |
 | `zep:zfs:force` | If `false`, omits `-F` from `zfs receive` (Safe Mode). Default: `true`. | `false` |
+| `zep:policy` | Replication policy: `fail` (abort on any error) or `resilience` (skip unreachable/split-brain nodes and continue chain). Default: `fail`. | `resilience` |
+| `zep:ssh:timeout` | SSH connection timeout in seconds. Default: `10`. | `30` |
+| `zep:proc:timeout` | Total process/transfer timeout in seconds. Default: `3600`. | `7200` |
 | `zep:throttle` | Bandwidth limit for `mbuffer` (e.g., `100M`, `1G`). Uses `-R`. | `50M` |
 | `zep:mbuffer_size` | Size of `mbuffer` in-memory buffer. Default: `64M`. | `256M` |
 | `zep:alert:critical:threshold` | Rate limit for critical alerts (Default: 0s). | `0s` |
