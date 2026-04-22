@@ -158,8 +158,8 @@ else
             local_ds="${configured_pool}/${ds_name}"
         fi
     else
-        # Last resort fallback
-        local_ds="${my_hostname}-pool/${ds_name}"
+        # Last resort fallback: use the provided name directly
+        local_ds="$raw_dataset"
         REPL_CHAIN=$(get_zfs_prop "zep:chain" "$raw_dataset")
     fi
 fi
