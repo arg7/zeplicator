@@ -283,7 +283,7 @@ check_stuck_job() {
             if [[ $waited -ge $timeout_val ]]; then
                 die "ERR: Timeout waiting for lock $LOCKFILE after $timeout_val seconds. Lock held by PID: $lock_pid"
             fi
-            echo "Lock $LOCKFILE held by PID $lock_pid. Waiting... ($waited/${timeout_val}s)"
+            echo "${CHAIN_PREFIX}Lock $LOCKFILE held by PID $lock_pid. Waiting... ($waited/${timeout_val}s)"
             sleep 10
             waited=$((waited + 10))
             continue

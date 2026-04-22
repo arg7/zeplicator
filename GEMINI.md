@@ -44,6 +44,8 @@ Zeplicator is a modular ZFS replication manager designed for peer-to-peer donor 
   3. Deploy the resulting `build/zep` to the nodes at `/scripts/build/zep`.
 - Failure to run `build.sh` means your changes only exist in the source files and not in the actual executable running on the Docker mesh.
 
+- Test bench config: if docker has node[1-3] running, use docker exec node1 /scripts/build/zep for testing. if not try to launch ./build/zep with --alias node1
+
 ## Deployment Workflow
 ```bash
 ./build.sh
