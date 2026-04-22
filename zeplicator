@@ -565,22 +565,25 @@ fi
 if [[ "$IS_MASTER" == false ]]; then
     # 1. Check for heartbeat property
     HB_PROP="zep:alert:heartbeat:${label}"
-    HB_THRESHOLD=$(get_zfs_prop "$HB_PROP" "$local_ds")
+    HB_THRESHOLD_RAW=$(get_zfs_prop "$HB_PROP" "$local_ds")
     
-    if [[ "$HB_THRESHOLD" != "-" ]]; then
-        # 2. Find latest snapshot for label
+    if [[ "$HB_THRESHOLD_RAW" != "-" ]]; then
+        # 2. Parse threshold to seconds
+        HB_THRESHOLD_SEC=$(parse_time_to_seconds "$HB_THRESHOLD_RAW")
+        
+        # 3. Find latest snapshot for label
         LATEST_SNAP_NAME=$(zfs list -t snap -o name -H -S creation -r "$local_ds" | grep "@.*$label" | head -n 1)
         
         if [[ -n "$LATEST_SNAP_NAME" ]]; then
-            # 3. Calculate age in minutes
+            # 4. Calculate age in seconds
             SNAP_TIME=$(zfs get -H -o value creation "$LATEST_SNAP_NAME")
             SNAP_EPOCH=$(date -d "$SNAP_TIME" +%s)
             NOW_EPOCH=$(date +%s)
-            AGE_MIN=$(( (NOW_EPOCH - SNAP_EPOCH) / 60 ))
+            AGE_SEC=$(( NOW_EPOCH - SNAP_EPOCH ))
             
-            # 4. If age exceeds threshold, alert
-            if [[ $AGE_MIN -gt $HB_THRESHOLD ]]; then
-                send_smtp_alert "CRITICAL: Upstream chain silent for label '${label}' on '${local_ds}'. Latest snapshot '${LATEST_SNAP_NAME}' is ${AGE_MIN} minutes old (threshold: ${HB_THRESHOLD})."
+            # 5. If age exceeds threshold, alert
+            if [[ $AGE_SEC -gt $HB_THRESHOLD_SEC ]]; then
+                send_smtp_alert "CRITICAL: Upstream chain silent for label '${label}' on '${local_ds}'. Latest snapshot '${LATEST_SNAP_NAME}' is $((AGE_SEC/60)) minutes old (threshold: ${HB_THRESHOLD_RAW})."
             fi
         fi
     fi

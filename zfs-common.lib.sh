@@ -109,6 +109,22 @@ log_message() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') [$alias] $msg" >> "$log_file" 2>/dev/null || true
 }
 
+parse_time_to_seconds() {
+    local time_str="$1"
+    local unit="${time_str: -1}"
+    local value="${time_str%?}"
+
+    case "$unit" in
+        s) echo "$value" ;;
+        m) echo "$((value * 60))" ;;
+        h) echo "$((value * 3600))" ;;
+        d) echo "$((value * 86400))" ;;
+        M) echo "$((value * 86400 * 30))" ;;
+        Y) echo "$((value * 86400 * 365))" ;;
+        *) echo "$time_str" ;; # assume it's already seconds
+    esac
+}
+
 resolve_node_pool() {
     local alias=$1
     local ds_raw=$2
