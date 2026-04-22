@@ -50,7 +50,7 @@ The following packages must be installed on all nodes:
    ```bash
    git clone https://github.com/arg7/zfs-replication.git
    cd zfs-replication
-   ./build.sh  # Generates zep-standalone.sh
+   make  # Generates build/zep
    ln -s $(pwd)/zep-standalone.sh /usr/local/bin/zep
    ```
 
@@ -128,6 +128,21 @@ zep pool/new-data --config --import /tmp/repl.conf
 
 ### Usage
 
+### System Status (`--status`)
+The `--status` command provides a comprehensive, color-coded overview of the health of the entire replication chain. It aggregates status hierarchically from individual snapshots up to the node level.
+
+```bash
+zep pool/mydata --status
+```
+
+Features:
+- **Hierarchical Health Aggregation**: The health state (Green/Yellow/Red) bubbles up from snapshots $\rightarrow$ datasets $\rightarrow$ zpools $\rightarrow$ nodes. If any snapshot is critical, the entire dataset, its pool, and the node will be marked red.
+- **Visual Icons**: Uses simple indicators: `●` for nodes, `💾` for pools, and `📁` for datasets.
+- **Zpool Capacity Monitoring**: Automatically flags zpools as Warning (yellow) if usage $\ge$ 40% and Critical (red) if $\ge$ 80% or if the pool is offline.
+- **Smart Heartbeat Parsing**: Snapshot freshness is validated against the `zep:alert:heartbeat:<label>` property. If unconfigured, the script intelligently parses time values directly from the label (e.g., `min15`, `hour2`, `day1`).
+- **Unconfigured Detection**: Highlights snapshots that exist but have no retention policy configured (`[unconfigured]`).
+- **Automation Ready**: Returns precise shell exit codes (`0` = OK, `1` = Warning, `2` = Critical) for monitoring integrations.
+
 ### Basic Replication
 ```bash
 zep pool/mydata min1 10
@@ -181,7 +196,7 @@ The project is split into several libraries for easier testing:
 - `zfs-transfer.lib.sh`: The core replication engine.
 - `zeplicator`: The main orchestrator script.
 
-Use `./build.sh` to compile these into a single `zep-standalone.sh` for distribution.
+Use `make` to compile these into a single `build/zep` executable for distribution.
 
 ## Credits
 This script incorporates core logic from `zfsbud.sh` by [Pawel Ginalski (gbyte.dev)](https://gbyte.dev).

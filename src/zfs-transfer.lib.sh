@@ -69,8 +69,6 @@ zfsbud_core() {
   local send_flags=""
   local resume=""
 
-  local snapshot_prefix=$(zbud_config_get default_snapshot_prefix)
-  
   local create remove_old send initial recursive_send recursive_create recursive_destroy remote_shell verbose log dry_run snapshot_label destination_parent_dataset
   declare -A src_keep_timestamps=() src_kept_timestamps=() dst_keep_timestamps=() dst_kept_timestamps=()
   local source_snapshots=() destination_snapshots=() last_snapshot_common resume_token

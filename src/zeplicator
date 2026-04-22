@@ -8,6 +8,7 @@ LIB_DIR=$(dirname "$ZEPLICATOR_CMD")
 
 # Phase 1: Source library modules
 source "${LIB_DIR}/zfs-common.lib.sh"
+source "${LIB_DIR}/zfs-status.lib.sh"
 source "${LIB_DIR}/zfs-alerts.lib.sh"
 source "${LIB_DIR}/zfs-retention.lib.sh"
 source "${LIB_DIR}/zfs-transfer.lib.sh"
@@ -38,6 +39,7 @@ Primary Flags:
   --initial         Perform an initial replication (uses full stream, mbuffer/zstd).
   --suspend/resume  Suspend or resume replication across the entire chain.
   --config          Enter configuration mode to view/set/clear 'zep:' ZFS properties.
+  --status          Probe and display system status for the replication chain.
   --alias <name>    Manually specify the local node alias (overrides hostname detection).
 
 Advanced Flags:
@@ -87,6 +89,7 @@ TARGET_NODE=""
 IS_DONOR=false
 CONFIG_MODE=false
 config_args=()
+STATUS_MODE=false
 
 CLI_ALIAS=""
 
@@ -111,6 +114,8 @@ while [[ $# -gt 0 ]]; do
         --donor) IS_DONOR=true; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
         --snap-list) VIRTUAL_SNAPS_INCOMING="$2"; shift 2 ;;
+        --status) STATUS_MODE=true; shift ;;
+        --get-state) GET_STATE_MODE=true; shift ;;
         --config) 
             CONFIG_MODE=true
             shift
@@ -132,7 +137,7 @@ if [[ ${#positional_args[@]} -gt 0 ]]; then raw_dataset="${positional_args[0]}";
 if [[ ${#positional_args[@]} -gt 1 ]]; then label="${positional_args[1]}"; fi
 if [[ ${#positional_args[@]} -gt 2 ]]; then keep_fallback="${positional_args[2]}"; fi
 
-[[ -n "$raw_dataset" ]] || usage
+if [[ "$STATUS_MODE" != true ]]; then if [[ "$STATUS_MODE" != true && "$GET_STATE_MODE" != true ]]; then [[ -n "$raw_dataset" ]] || usage; fi; fi
 
 # Early local dataset resolution
 my_hostname=$(get_local_alias "$raw_dataset" "$CLI_ALIAS")
@@ -155,9 +160,27 @@ else
     else
         # Last resort fallback
         local_ds="${my_hostname}-pool/${ds_name}"
+        REPL_CHAIN=$(get_zfs_prop "zep:chain" "$raw_dataset")
     fi
 fi
+
+if [[ "$CASCADED" != true ]]; then
+    expected_ds=$(get_zfs_prop "zep:node:${my_hostname}:fs" "$raw_dataset")
+    if [[ -n "$expected_ds" && "$expected_ds" != "-" ]]; then
+        if [[ ! "$local_ds" =~ ^"$expected_ds" ]]; then
+            echo "⚠️  Dataset $local_ds is not managed by node $my_hostname (configured: $expected_ds)"
+            exit 1
+        fi
+    fi
+fi
+
 dataset=$local_ds # Ensure helper functions use the local path
+
+# Handle Status logic
+if [[ "$STATUS_MODE" == true ]]; then
+    cmd_status "$raw_dataset"
+    exit $?
+fi
 
 # Handle Configuration logic
 handle_config() {

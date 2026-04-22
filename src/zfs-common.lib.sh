@@ -21,7 +21,6 @@ get_local_alias() {
     fi
 
     local sys_host=$(hostname)
-    # zbud_msg "  🧪 DEBUG: get_local_alias(ds=$raw_ds, cli=$cli_alias). sys_host=$sys_host"
     
     # Try to read the chain from the dataset
     local chain=$(get_zfs_prop "zep:chain" "$raw_ds")
@@ -36,7 +35,6 @@ get_local_alias() {
 
     # 2. Does hostname directly match an alias in the chain?
     for n in "${nodes[@]}"; do
-        # zbud_msg "  🧪 DEBUG: Comparing alias '$n' with sys_host '$sys_host'"
         if [[ "$n" == "$sys_host" ]]; then
             echo "$sys_host"
             return 0
@@ -45,10 +43,8 @@ get_local_alias() {
 
     # 3. Does any node's FQDN resolve to one of our local IPs?
     local local_ips=$(hostname -I 2>/dev/null || ip -4 addr show 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
-    # zbud_msg "  🧪 DEBUG: local_ips='$local_ips'"
     for n in "${nodes[@]}"; do
         local n_fqdn=$(get_zfs_prop "zep:node:${n}:fqdn" "$raw_ds")
-        # zbud_msg "  🧪 DEBUG: Checking node '$n' with fqdn '$n_fqdn'"
         if [[ -n "$n_fqdn" && "$n_fqdn" != "-" ]]; then
             # Direct string match with local IPs
             if echo "$local_ips" | grep -qw "$n_fqdn"; then
@@ -101,7 +97,6 @@ resolve_proc_timeout() {
     [[ -z "$t" || "$t" == "-" ]] && echo "3600" || echo "$t"
 }
 
-# Resolve pool (filesystem) for a specific node alias
 log_message() {
     local msg="$1"
     local alias=$(hostname)
@@ -134,25 +129,25 @@ resolve_node_pool() {
     local fqdn=$(resolve_node_fqdn "$alias" "$ds_raw")
     local user=$(resolve_node_user "$alias" "$ds_raw")
     local ssh_t=$(resolve_ssh_timeout "$ds_raw")
-    # zbud_msg "  🧪 DEBUG: resolve_node_pool($alias). my_alias=$my_alias, user=$user, fqdn=$fqdn, ssh_t=$ssh_t"
 
     # Pre-flight check: Is node reachable?
     if [[ "$alias" != "$my_alias" ]]; then
-        # zbud_msg "  🧪 DEBUG: Pre-flight SSH check: ssh -o ConnectTimeout=$ssh_t -o BatchMode=yes ${user}@${fqdn} true"
         if ! ssh -o ConnectTimeout="$ssh_t" -o BatchMode=yes "${user}@${fqdn}" "true" 2>/dev/null; then
-            # zbud_msg "  🧪 DEBUG: Pre-flight SSH check FAILED"
             return 255
         fi
     fi
 
-    # Try to get pool from the node itself
-    if [[ "$alias" == "$my_alias" ]]; then
-        pool=$(get_zfs_prop "zep:node:${alias}:fs" "$ds_raw")
-    else
-        pool=$(timeout "$((ssh_t + 5))" ssh -o ConnectTimeout="$ssh_t" "${user}@${fqdn}" "zfs get -H -o value zep:node:${alias}:fs $ds_raw 2>/dev/null | grep -v '^-' | head -n 1")
+    # Try local property first (Master has the full config)
+    pool=$(get_zfs_prop "zep:node:${alias}:fs" "$ds_raw")
+    
+    if [[ -z "$pool" || "$pool" == "-" ]]; then
+        # Try to get pool from the node itself if reachable
+        if [[ "$alias" != "$my_alias" ]]; then
+            pool=$(timeout "$((ssh_t + 5))" ssh -o ConnectTimeout="$ssh_t" "${user}@${fqdn}" "zfs get -H -o value zep:node:${alias}:fs $ds_raw 2>/dev/null | grep -v '^-' | head -n 1")
+        fi
     fi
     
-    if [[ -z "$pool" ]]; then
+    if [[ -z "$pool" || "$pool" == "-" ]]; then
         # Fallback 1: try generic 'pool'
         if [[ "$alias" == "$my_alias" ]]; then
             if zfs list pool >/dev/null 2>&1; then pool="pool"; fi
@@ -243,29 +238,6 @@ die() {
     exit $exit_code
 }
 
-zbud_config_read_file() {
-  (grep -E "^${2}=" -m 1 "${1}" 2>/dev/null || echo "VAR=__UNDEFINED__") | head -n 1 | cut -d '=' -f 2-;
-}
-
-zbud_config_get() {
-  local working_dir="$(dirname "$(readlink -f "$0")")"
-  local val="$(zbud_config_read_file $working_dir/zfsbud.conf "${1}")";
-  if [ "${val}" = "__UNDEFINED__" ]; then
-    val="$(zbud_config_read_file $working_dir/default.zfsbud.conf "${1}")";
-    if [ "${val}" = "__UNDEFINED__" ]; then
-      # Fallback defaults if config files are missing
-      case "$1" in
-        default_snapshot_prefix) echo "zfsbud_" ;;
-        src_minutes|src_hourly|src_daily|src_weekly|src_monthly|src_yearly) echo "0" ;;
-        dst_minutes|dst_hourly|dst_daily|dst_weekly|dst_monthly|dst_yearly) echo "0" ;;
-        *) zbud_die "Default configuration for '${1}' is missing." ;;
-      esac
-      return
-    fi
-  fi
-  printf -- "%s" "${val}";
-}
-
 check_stuck_job() {
     local lock_suffix=""
     [[ -n "$CLI_ALIAS" ]] && lock_suffix="-${CLI_ALIAS}"
@@ -276,7 +248,6 @@ check_stuck_job() {
     local timeout_val=$(resolve_proc_timeout "$dataset")
     
     # Determine if we should wait or fail fast
-    # Wait for: promote, cascaded, suspend, resume, mark-only, or manual run (terminal)
     local wait_for_lock=false
     if [[ "$CASCADED" == true || "$PROMOTE" == true || "$SUSPEND" == true || "$RESUME" == true || "$MARK_ONLY" == true || -t 0 ]]; then
         wait_for_lock=true
@@ -305,7 +276,6 @@ check_stuck_job() {
             continue
         fi
 
-        # Normal cron behavior (fail fast or check stuck)
         local cur_time=$(date +%s)
         local m_time=$(stat -c %Y "$LOCKFILE" 2>/dev/null || echo "$cur_time")
         local age=$((cur_time - m_time))
@@ -323,7 +293,6 @@ check_stuck_job() {
             fi
             die "ERR: Stuck job detected ($age seconds old) at $LOCKFILE. Alert sent."
         else
-            # SILENT EXIT: Don't alert if it's just a normal overlap within timeout
             zbud_msg "ℹ️  Replication already running ($age seconds ago) at $LOCKFILE. PID: $lock_pid. Skipping run."
             exit 0
         fi
@@ -337,7 +306,6 @@ check_stuck_job() {
 iomon() {
     local lock="$1"
     local interval="$2"
-    # Call the C binary
     /usr/local/bin/iomon "$lock" "$interval"
 }
 
@@ -348,7 +316,6 @@ check_replication_progress() {
     
     local last_size=$(cat "$cnt_file" 2>/dev/null || echo 0)
 
-    # Wait a bit to see if size increases
     sleep 2
     local current_size=$(cat "$cnt_file" 2>/dev/null || echo 0)
 
@@ -358,3 +325,5 @@ check_replication_progress() {
 
     return 1 # Stuck
 }
+
+
