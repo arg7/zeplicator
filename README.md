@@ -63,6 +63,10 @@ The following packages must be installed on all nodes:
 | `zep:zfs:force` | If `false`, omits `-F` from `zfs receive` (Safe Mode). Default: `true`. | `false` |
 | `zep:throttle` | Bandwidth limit for `mbuffer` (e.g., `100M`, `1G`). Uses `-R`. | `50M` |
 | `zep:mbuffer_size` | Size of `mbuffer` in-memory buffer. Default: `64M`. | `256M` |
+| `zep:alert:critical:threshold` | Rate limit for critical alerts (Default: 0s). | `0s` |
+| `zep:alert:warn:threshold` | Rate limit for warning alerts (Default: 1h). | `1h` |
+| `zep:alert:info:threshold` | Rate limit for info alerts (Default: 24h). | `24h` |
+| `zep:alert:heartbeat:<label>` | Heartbeat freshness threshold for upstream nodes. | `1h` |
 
 ### Configuration Management (`--config`)
 
