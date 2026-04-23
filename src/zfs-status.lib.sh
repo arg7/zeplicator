@@ -109,40 +109,67 @@ cmd_status() {
                 else hb=60; fi
             fi
             
-            c=$C_GREEN; [[ $age -ge $((hb*5)) ]] && c=$C_YELLOW; [[ $age -ge $((hb*10)) ]] && c=$C_RED
-            filesystems+="${line}|${c}"$'\n'
+            c_logic="GREEN"; [[ $age -ge $((hb*5)) ]] && c_logic="YELLOW"; [[ $age -ge $((hb*10)) ]] && c_logic="RED"
+            filesystems+="${line}|${c_logic}"$'\n'
         done <<< "$filesystems_raw"
 
         relevant_pools=$(echo "$filesystems" | cut -d'|' -f2 | cut -d'/' -f1 | sort -u)
         
         # Pre-evaluate Zpool statuses
-        pool_max_status=$C_GREEN
+        pool_max_status="GREEN"
+        pool_has_check=""
+        pool_has_full=""
         for p_name in $relevant_pools; do
             p_line=$(echo "$zpools" | awk -v p="$p_name" '$1 == p')
             health=$(echo "$p_line" | awk '{print $2}')
             cap=$(echo "$p_line" | awk '{print $3}' | tr -d '%')
             
-            [[ "$health" != "ONLINE" ]] && pool_max_status=$C_RED
-            [[ "$pool_max_status" != "$C_RED" && "$cap" -ge 40 ]] && pool_max_status=$C_YELLOW
-            [[ "$cap" -ge 80 ]] && pool_max_status=$C_RED
+            if [[ "$health" != "ONLINE" ]]; then pool_max_status="RED"; pool_has_check="true"; fi
+            if [[ "$pool_max_status" != "RED" && "$cap" -ge 40 ]]; then pool_max_status="YELLOW"; fi
+            if [[ "$cap" -ge 80 ]]; then pool_max_status="RED"; fi
+            if [[ "$cap" -ge 40 ]]; then pool_has_full="true"; fi
         done
 
         # Aggregate Node status
-        n_status=$C_GREEN
-        [[ $node_reachable -ne 0 ]] && n_status=$C_RED
-        [[ "$n_status" != "$C_RED" && "$filesystems" =~ "$C_RED" ]] && n_status=$C_RED
-        [[ "$n_status" != "$C_RED" && "$filesystems" =~ "$C_YELLOW" ]] && n_status=$C_YELLOW
-        [[ "$n_status" != "$C_RED" && "$pool_max_status" == "$C_RED" ]] && n_status=$C_RED
-        [[ "$n_status" != "$C_RED" && "$pool_max_status" == "$C_YELLOW" ]] && n_status=$C_YELLOW
+        n_status="GREEN"
+        [[ $node_reachable -ne 0 ]] && n_status="RED"
+        [[ "$n_status" != "RED" && "$filesystems" =~ \|RED$'\n' ]] && n_status="RED"
+        [[ "$n_status" != "RED" && "$filesystems" =~ \|YELLOW$'\n' ]] && n_status="YELLOW"
+        [[ "$n_status" != "RED" && "$pool_max_status" == "RED" ]] && n_status="RED"
+        [[ "$n_status" != "RED" && "$pool_max_status" == "YELLOW" ]] && n_status="YELLOW"
         
         # Update global exit code
-        if [[ "$n_status" == "$C_RED" ]]; then
+        if [[ "$n_status" == "RED" ]]; then
             global_exit_code=2
-        elif [[ "$n_status" == "$C_YELLOW" && $global_exit_code -lt 1 ]]; then
+        elif [[ "$n_status" == "YELLOW" && $global_exit_code -lt 1 ]]; then
             global_exit_code=1
         fi
         
-        echo -e "${n_status}●${C_RESET} $n"
+        n_desc=""
+        if [[ $node_reachable -eq 0 ]]; then
+            n_parts=()
+            
+            snap_desc=""
+            if [[ "$filesystems" =~ \|RED$'\n' ]]; then snap_desc="stale"
+            elif [[ "$filesystems" =~ \|YELLOW$'\n' ]]; then snap_desc="late"
+            fi
+            
+            if [[ -n "$snap_desc" ]]; then n_parts+=("snap: [$snap_desc]"); fi
+            
+            zpool_desc=""
+            if [[ "$pool_has_check" == "true" ]]; then zpool_desc="check"
+            elif [[ "$pool_has_full" == "true" ]]; then zpool_desc="full"
+            fi
+            
+            if [[ -n "$zpool_desc" ]]; then n_parts+=("zpool: [$zpool_desc]"); fi
+            
+            if [[ ${#n_parts[@]} -gt 0 ]]; then
+                n_desc="  $(IFS=", "; echo "${n_parts[*]}")"
+            fi
+        fi
+
+        c_node=$C_GREEN; [[ "$n_status" == "YELLOW" ]] && c_node=$C_YELLOW; [[ "$n_status" == "RED" ]] && c_node=$C_RED
+        echo -e "${c_node}●${C_RESET} $n${n_desc}"
         [[ $node_reachable -ne 0 ]] && { echo -e "  ${C_RED}  [UNREACHABLE]${C_RESET}"; continue; }
         
         for p_name in $relevant_pools; do
@@ -150,34 +177,45 @@ cmd_status() {
             health=$(echo "$p_line" | awk '{print $2}')
             cap=$(echo "$p_line" | awk '{print $3}' | tr -d '%')
             
-            p_status=$C_GREEN
-            [[ "$health" != "ONLINE" ]] && p_status=$C_RED
-            [[ "$cap" -ge 40 ]] && p_status=$C_YELLOW
-            [[ "$cap" -ge 80 ]] && p_status=$C_RED
+            p_status="GREEN"
+            p_desc=""
+            if [[ "$health" != "ONLINE" ]]; then p_status="RED"; p_desc=" [check]"; fi
+            if [[ "$cap" -ge 40 ]]; then 
+                if [[ "$p_status" != "RED" ]]; then p_status="YELLOW"; fi
+                if [[ "$cap" -ge 80 ]]; then p_status="RED"; fi
+                if [[ -z "$p_desc" ]]; then p_desc=" [full]"; else p_desc=", [full]"; fi
+            fi
             
             # Aggregate from child filesystems
             ds_statuses=$(echo "$filesystems" | grep "^FILESYSTEM|$p_name")
-            [[ "$p_status" != "$C_RED" && "$ds_statuses" =~ "$C_RED" ]] && p_status=$C_RED
-            [[ "$p_status" != "$C_RED" && "$ds_statuses" =~ "$C_YELLOW" ]] && p_status=$C_YELLOW
+            [[ "$p_status" != "RED" && "$ds_statuses" =~ \|RED$'\n' ]] && p_status="RED"
+            [[ "$p_status" != "RED" && "$ds_statuses" =~ \|YELLOW$'\n' ]] && p_status="YELLOW"
 
-            echo -e "  ${p_status}💾${C_RESET} $p_name ($health, $cap%)"
+            c_pool=$C_GREEN; [[ "$p_status" == "YELLOW" ]] && c_pool=$C_YELLOW; [[ "$p_status" == "RED" ]] && c_pool=$C_RED
+            echo -e "  ${c_pool}💾${C_RESET} $p_name ($health, $cap%)${p_desc}"
 
             # Use process substitution or a read loop from a string to preserve state if needed,
             # but since we already evaluated colors, we just read them.
             while read -r ds; do
                 [[ -z "$ds" ]] && continue
                 ds_lines=$(echo "$filesystems" | grep "^FILESYSTEM|$ds|")
-                ds_status=$C_GREEN
-                [[ "$ds_lines" =~ "$C_RED" ]] && ds_status=$C_RED
-                [[ "$ds_status" != "$C_RED" && "$ds_lines" =~ "$C_YELLOW" ]] && ds_status=$C_YELLOW
+                ds_status="GREEN"
+                [[ "$ds_lines" =~ \|RED$'\n' ]] && ds_status="RED"
+                [[ "$ds_status" != "RED" && "$ds_lines" =~ \|YELLOW$'\n' ]] && ds_status="YELLOW"
 
-                echo -e "    ${ds_status}📁${C_RESET} $(basename "$ds")"
+                c_ds=$C_GREEN; [[ "$ds_status" == "YELLOW" ]] && c_ds=$C_YELLOW; [[ "$ds_status" == "RED" ]] && c_ds=$C_RED
+                echo -e "    ${c_ds}📁${C_RESET} $(basename "$ds")"
                 while read -r line; do
                     [[ -z "$line" ]] && continue
-                    IFS='|' read -r _ _ label _ age conf hb c <<< "$line"
+                    IFS='|' read -r _ _ label _ age conf hb c_logic <<< "$line"
 
                     age_str=$(format_minutes "$age")
-                    [[ "$conf" == "false" ]] && echo -e "      - ${c}●${C_RESET} ${C_DIM}$label${C_RESET}: [${age_str}] ${C_RED}[unconfigured]${C_RESET}" || echo -e "      - ${c}●${C_RESET} $label: [${age_str}]"
+                    label_desc=""
+                    if [[ "$c_logic" == "YELLOW" ]]; then label_desc=" [late]"; fi
+                    if [[ "$c_logic" == "RED" ]]; then label_desc=" [stale]"; fi
+                    
+                    c_label=$C_GREEN; [[ "$c_logic" == "YELLOW" ]] && c_label=$C_YELLOW; [[ "$c_logic" == "RED" ]] && c_label=$C_RED
+                    [[ "$conf" == "false" ]] && echo -e "      - ${c_label}●${C_RESET} ${C_DIM}$label${C_RESET}: [${age_str}]${label_desc} ${C_RED}[unconfigured]${C_RESET}" || echo -e "      - ${c_label}●${C_RESET} $label: [${age_str}]${label_desc}"
                 done <<< "$ds_lines"
             done < <(echo "$filesystems" | grep -E "^FILESYSTEM\|${p_name}(\||/)" | cut -d'|' -f2 | sort -u)
         done

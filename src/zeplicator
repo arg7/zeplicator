@@ -102,6 +102,7 @@ while [[ $# -gt 0 ]]; do
         --mark-only) MARK_ONLY=true; shift ;;
         --initial) initial_send=true; shift ;;
         -bw) export ZEP_BW="true"; shift ;;
+        --force-color) export ZEP_FORCE_COLOR="true"; shift ;;
         --promote) PROMOTE=true; shift ;;
         --suspend) SUSPEND=true; shift ;;
         --resume) RESUME=true; shift ;;
@@ -132,6 +133,9 @@ while [[ $# -gt 0 ]]; do
         *) positional_args+=("$1"); shift ;; # Collect positional arguments
     esac
 done
+
+# Re-initialize colors now that flags like -bw and --force-color might be set
+init_colors
 
 # Assign positional arguments
 if [[ ${#positional_args[@]} -gt 0 ]]; then raw_filesystem="${positional_args[0]}"; fi
@@ -771,7 +775,12 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
             donor_target="${donor_user}@${donor_fqdn}"
 
             echo -e "${CHAIN_PREFIX}  ${C_GREEN}✅ SUCCESS:${C_RESET} Found donor peer '$DONOR_NODE' ($donor_fqdn). Delegating healing of '$hop_node'..."
-            if ssh "$donor_target" "$ZEPLICATOR_CMD $raw_filesystem $label $keep_fallback --alias $DONOR_NODE --target $hop_node --donor"; then
+            
+            donor_opts="--alias $DONOR_NODE --target $hop_node --donor"
+            if [[ "$ZEP_BW" == "true" ]]; then donor_opts+=" -bw"; fi
+            if [[ "$ZEP_COLORS_ENABLED" == "true" && "$ZEP_BW" != "true" ]]; then donor_opts+=" --force-color"; fi
+            
+            if ssh "$donor_target" "$ZEPLICATOR_CMD $raw_filesystem $label $keep_fallback $donor_opts"; then
                 echo -e "${CHAIN_PREFIX}  ${C_GREEN}✅${C_RESET} Delegated replication from $DONOR_NODE to $hop_node successful."
                 
                 # RETRY local replication now that common ground should exist
@@ -808,6 +817,7 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
             if [[ "$initial_send" == true ]]; then casc_opts+=" --initial"; fi
             if [[ "$DRY_RUN" == true ]]; then casc_opts+=" --dry-run"; fi
             if [[ "$ZEP_BW" == "true" ]]; then casc_opts+=" -bw"; fi
+            if [[ "$ZEP_COLORS_ENABLED" == "true" && "$ZEP_BW" != "true" ]]; then casc_opts+=" --force-color"; fi
             PROPS_ARG=$(get_repl_props_encoded "$local_ds")
             
             # Internal list of what arrived here (including virtual snaps)

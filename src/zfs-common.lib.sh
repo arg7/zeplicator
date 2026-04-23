@@ -218,26 +218,31 @@ apply_repl_props() {
     done
 }
 
-# Color detection
-if [[ -t 1 && -n "$TERM" && "$TERM" != "dumb" && "$ZEP_BW" != "true" ]]; then
-    C_RED='\e[31m'
-    C_GREEN='\e[32m'
-    C_YELLOW='\e[33m'
-    C_BLUE='\e[34m'
-    C_CYAN='\e[36m'
-    C_BOLD='\e[1m'
-    C_DIM='\e[2m'
-    C_RESET='\e[0m'
-else
-    C_RED=''
-    C_GREEN=''
-    C_YELLOW=''
-    C_BLUE=''
-    C_CYAN=''
-    C_BOLD=''
-    C_DIM=''
-    C_RESET=''
-fi
+init_colors() {
+    # Color detection
+    if [[ "$ZEP_BW" != "true" && ( "$ZEP_FORCE_COLOR" == "true" || ( -t 1 && -n "$TERM" && "$TERM" != "dumb" ) ) ]]; then
+        C_RED='\e[31m'
+        C_GREEN='\e[32m'
+        C_YELLOW='\e[33m'
+        C_BLUE='\e[34m'
+        C_CYAN='\e[36m'
+        C_BOLD='\e[1m'
+        C_DIM='\e[2m'
+        C_RESET='\e[0m'
+        export ZEP_COLORS_ENABLED="true"
+    else
+        C_RED=''
+        C_GREEN=''
+        C_YELLOW=''
+        C_BLUE=''
+        C_CYAN=''
+        C_BOLD=''
+        C_DIM=''
+        C_RESET=''
+        export ZEP_COLORS_ENABLED="false"
+    fi
+}
+init_colors
 
 zbud_msg() { 
     local msg="${CHAIN_PREFIX}    $*"
