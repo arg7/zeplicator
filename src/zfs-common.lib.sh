@@ -22,7 +22,7 @@ get_local_alias() {
 
     local sys_host=$(hostname)
     
-    # Try to read the chain from the dataset
+    # Try to read the chain from the filesystem
     local chain=$(get_zfs_prop "zep:chain" "$raw_ds")
     
     if [[ -z "$chain" ]]; then
@@ -174,7 +174,7 @@ resolve_node_pool() {
     echo "$pool"
 }
 
-resolve_node_dataset() {
+resolve_node_filesystem() {
     local alias=$1
     local ds_raw=$2
     local pool=$(resolve_node_pool "$alias" "$ds_raw")
@@ -282,11 +282,11 @@ die() {
 check_stuck_job() {
     local lock_suffix=""
     [[ -n "$CLI_ALIAS" ]] && lock_suffix="-${CLI_ALIAS}"
-    local lock_name="${dataset//\//-}-${label}${lock_suffix}.lock"
+    local lock_name="${filesystem//\//-}-${label}${lock_suffix}.lock"
     LOCKFILE="/tmp/${lock_name}"
     export LOCKFILE
     
-    local timeout_val=$(resolve_proc_timeout "$dataset")
+    local timeout_val=$(resolve_proc_timeout "$filesystem")
     
     # Determine if we should wait or fail fast
     local wait_for_lock=false
@@ -323,14 +323,14 @@ check_stuck_job() {
         
         if [[ "$age" -gt "$timeout_val" ]]; then
             # Progress Check: Is data actually moving?
-            if check_replication_progress "$dataset"; then
+            if check_replication_progress "$filesystem"; then
                 zbud_msg "  ⏳ Job exceeded timeout ($((age/60)) min) but progress is being made. Skipping alert and letting it continue."
                 touch "$LOCKFILE" # Reset age to prevent constant re-checking
                 exit 0
             fi
 
             if type send_smtp_alert >/dev/null 2>&1; then
-                send_smtp_alert "critical" "CRITICAL: ZFS replication job for $dataset ($label) is stuck. Lock file: $LOCKFILE. Age: $((age/60)) min. Timeout: $((timeout_val/60)) min. PID recorded: $lock_pid"
+                send_smtp_alert "critical" "CRITICAL: ZFS replication job for $filesystem ($label) is stuck. Lock file: $LOCKFILE. Age: $((age/60)) min. Timeout: $((timeout_val/60)) min. PID recorded: $lock_pid"
             fi
             die "ERR: Stuck job detected ($age seconds old) at $LOCKFILE. Alert sent."
         else

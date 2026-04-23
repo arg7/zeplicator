@@ -38,7 +38,7 @@ find_best_donor() {
         if [[ "$donor_pool" == *"/"* ]]; then ds_on_donor="$donor_pool"; fi
         
         # Check if donor has snapshots and shares GUID with target
-        log_message "  Verifying dataset $ds_on_donor on $donor_alias..."
+        log_message "  Verifying filesystem $ds_on_donor on $donor_alias..."
         if timeout "$((ssh_t + 5))" ssh -o ConnectTimeout="$ssh_t" "$donor_target" "zfs list -t snapshot -H -r $ds_on_donor >/dev/null 2>&1"; then
             log_message "  Performing capability dry-run on $donor_alias..."
             if timeout "$((proc_t + 5))" ssh -o ConnectTimeout="$ssh_t" "$donor_target" "$ZEPLICATOR_CMD $ds_raw $label 0 --alias $donor_alias --target $target_node --donor --dry-run >/dev/null 2>&1"; then
@@ -49,7 +49,7 @@ find_best_donor() {
                 log_message "  ❌ $donor_alias dry-run failed (no common snapshots with $target_node)."
             fi
         else
-            log_message "  ❌ Dataset or snapshots missing on $donor_alias."
+            log_message "  ❌ Filesystem or snapshots missing on $donor_alias."
         fi
     done
     log_message "No suitable donor found for $target_node."
@@ -69,7 +69,7 @@ zfsbud_core() {
   local send_flags=""
   local resume=""
 
-  local create remove_old send initial recursive_send recursive_create recursive_destroy remote_shell verbose log dry_run snapshot_label destination_parent_dataset
+  local create remove_old send initial recursive_send recursive_create recursive_destroy remote_shell verbose log dry_run snapshot_label destination_parent_filesystem
   declare -A src_keep_timestamps=() src_kept_timestamps=() dst_keep_timestamps=() dst_kept_timestamps=()
   local source_snapshots=() destination_snapshots=() last_snapshot_common resume_token
 
@@ -78,7 +78,7 @@ zfsbud_core() {
   while getopts "cs:in e:Rrp:vldL:h" opt; do
     case $opt in
       c) create=1 ;;
-      s) send=1; destination_parent_dataset=$OPTARG ;;
+      s) send=1; destination_parent_filesystem=$OPTARG ;;
       i) initial=1 ;;
       n) unset zbud_resume ;;
       e) remote_shell=$OPTARG ;;
@@ -92,10 +92,10 @@ zfsbud_core() {
     esac
   done
   shift $((OPTIND-1))
-  local datasets=("$@")
+  local filesystems=("$@")
 
   # Helper inner functions
-  dataset_exists() {
+  filesystem_exists() {
     if [ -n "$remote_shell" ]; then
       $remote_shell "zfs list -H -o name" 2>/dev/null | grep -qx "$1" && return 0
     else
@@ -105,7 +105,7 @@ zfsbud_core() {
   }
 
   set_resume_token() {
-    ! dataset_exists "$1" && return 0
+    ! filesystem_exists "$1" && return 0
     local token="-"
     if [ -n "$remote_shell" ]; then
       token=$($remote_shell "zfs get -H -o value receive_resume_token $1" 2>/dev/null)
@@ -134,7 +134,7 @@ zfsbud_core() {
   }
   
   set_source_snapshots() {
-    # format: dataset@name<tab>guid
+    # format: filesystem@name<tab>guid
     mapfile -t source_snapshots < <(get_local_snapshots "$1")
   }
   
@@ -202,15 +202,15 @@ zfsbud_core() {
     zbud_msg "Initial source snapshot (latest): $latest_snapshot_source"
     zbud_msg "Sending initial snapshot to destination $remote_ds..."
     
-    # Identify LOCAL dataset to send from
-    local local_ds="$dataset"
+    # Identify LOCAL filesystem to send from
+    local local_ds="$filesystem"
 
-    local timeout_val=$(resolve_proc_timeout "$dataset")
-    local ssh_t=$(resolve_ssh_timeout "$dataset")
+    local timeout_val=$(resolve_proc_timeout "$filesystem")
+    local ssh_t=$(resolve_ssh_timeout "$filesystem")
 
     # Configure flags based on properties
-    local use_raw=$(get_zfs_prop "zep:zfs:raw" "$dataset")
-    local use_resume=$(get_zfs_prop "zep:zfs:resume" "$dataset")
+    local use_raw=$(get_zfs_prop "zep:zfs:raw" "$filesystem")
+    local use_resume=$(get_zfs_prop "zep:zfs:resume" "$filesystem")
     
     local send_args="-R"
     local recv_args="-u"
@@ -261,15 +261,15 @@ zfsbud_core() {
 
     zbud_msg "  ${C_CYAN}🚀 Sending incremental:${C_RESET} $last_snapshot_common -> ${latest_snapshot_source#*@} to $remote_ds"
     
-    # Identify LOCAL dataset to send from
-    local local_ds="$dataset"
+    # Identify LOCAL filesystem to send from
+    local local_ds="$filesystem"
 
-    local timeout_val=$(resolve_proc_timeout "$dataset")
-    local ssh_t=$(resolve_ssh_timeout "$dataset")
+    local timeout_val=$(resolve_proc_timeout "$filesystem")
+    local ssh_t=$(resolve_ssh_timeout "$filesystem")
 
     # Configure flags based on properties
-    local use_raw=$(get_zfs_prop "zep:zfs:raw" "$dataset")
-    local use_resume=$(get_zfs_prop "zep:zfs:resume" "$dataset")
+    local use_raw=$(get_zfs_prop "zep:zfs:raw" "$filesystem")
+    local use_resume=$(get_zfs_prop "zep:zfs:resume" "$filesystem")
     
     local send_args="-p $recursive_send -i \"$local_ds@$last_snapshot_common\""
     local recv_args="-u"
@@ -319,26 +319,26 @@ zfsbud_core() {
   }
 
   # Simplified processing for zeplicator context
-  for dataset in "${datasets[@]}"; do
-    ds_name="${dataset#*/}"
-    local_ds="$dataset"
+  for filesystem in "${filesystems[@]}"; do
+    ds_name="${filesystem#*/}"
+    local_ds="$filesystem"
     local remote_ds=""
 
-    # If destination_parent_dataset is already a full path (contains /), use it as the exact target
-    if [[ "$destination_parent_dataset" == *"/"* ]]; then
-        remote_ds="$destination_parent_dataset"
+    # If destination_parent_filesystem is already a full path (contains /), use it as the exact target
+    if [[ "$destination_parent_filesystem" == *"/"* ]]; then
+        remote_ds="$destination_parent_filesystem"
     else
-        remote_ds="${destination_parent_dataset}/${ds_name}"
+        remote_ds="${destination_parent_filesystem}/${ds_name}"
     fi
     
-    zbud_msg "  ${C_BLUE}📦 Processing${C_RESET} $local_ds -> ${destination_parent_dataset} (Target: ${remote_ds})"
+    zbud_msg "  ${C_BLUE}📦 Processing${C_RESET} $local_ds -> ${destination_parent_filesystem} (Target: ${remote_ds})"
     
-    REPL_FORCE=$(get_zfs_prop "zep:zfs:force" "$dataset")
+    REPL_FORCE=$(get_zfs_prop "zep:zfs:force" "$filesystem")
 
     # Resolve Throttling and Buffering
-    local throttle=$(get_zfs_prop "zep:throttle" "$dataset")
+    local throttle=$(get_zfs_prop "zep:throttle" "$filesystem")
     [[ "$throttle" != "-" ]] && mbuffer_throttle="-R $throttle" || mbuffer_throttle="-r $RATE"
-    local m_size=$(get_zfs_prop "zep:mbuffer_size" "$dataset")
+    local m_size=$(get_zfs_prop "zep:mbuffer_size" "$filesystem")
     [[ "$m_size" != "-" ]] && mbuffer_size="$m_size" || mbuffer_size="$BUF"
 
     set_source_snapshots "$local_ds"
@@ -365,7 +365,7 @@ zfsbud_core() {
     set_destination_snapshots "$remote_ds"
     local ds_status=$?
     if [[ $ds_status -ne 0 && $ds_status -ne 1 ]]; then
-       zbud_msg "Target node unreachable or dataset listing failed (Status: $ds_status)"
+       zbud_msg "Target node unreachable or filesystem listing failed (Status: $ds_status)"
        return $ds_status
     fi
 
@@ -413,7 +413,7 @@ zfsbud_core() {
                prev="$name"
            done <<< "$chron_list"
            
-           # Check dataset head
+           # Check filesystem head
            head_written=$(zfs get -H -o value written "$ds" 2>/dev/null)
            if [[ "$head_written" != "0" && "$head_written" != "-" && -n "$head_written" ]]; then
                found_divergence="true"
@@ -458,9 +458,9 @@ zfsbud_core() {
            zbud_msg "${C_RED}🚨 Aborting replication to prevent silent data destruction!${C_RESET}"
            
            # Generate specific rollback hint
-           local hint_msg="HINT: Data divergence (Split-Brain) detected on ${hop_node:-destination} ${remote_ds} dataset.|HINT_NL|"
+           local hint_msg="HINT: Data divergence (Split-Brain) detected on ${hop_node:-destination} ${remote_ds} filesystem.|HINT_NL|"
            hint_msg+="To realign the affected node without destroying the rest of the chain,|HINT_NL|"
-           hint_msg+="log into ${hop_node:-the destination node} and manually rollback its dataset to the last common snapshot:|HINT_NL|"
+           hint_msg+="log into ${hop_node:-the destination node} and manually rollback its filesystem to the last common snapshot:|HINT_NL|"
            hint_msg+="  zfs rollback -r ${remote_ds}@${last_snapshot_common}"
            
            echo "$hint_msg" > /tmp/zfs-replication.hint

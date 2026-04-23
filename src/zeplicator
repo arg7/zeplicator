@@ -14,7 +14,7 @@ source "${LIB_DIR}/zfs-retention.lib.sh"
 source "${LIB_DIR}/zfs-transfer.lib.sh"
 
 # Initialize default variables
-raw_dataset=""
+raw_filesystem=""
 label="frequently"
 keep_fallback="10"
 
@@ -23,10 +23,10 @@ usage() {
 zeplicator - Modular ZFS Replication Manager
 
 Usage:
-  $(basename "$0") <dataset> [label] [keep_fallback] [flags]
+  $(basename "$0") <filesystem> [label] [keep_fallback] [flags]
 
 Positional Arguments:
-  <dataset>         The ZFS dataset to replicate (e.g., tank/data).
+  <filesystem>         The ZFS filesystem to replicate (e.g., tank/data).
                     Can be a remote alias if 'zep:node:<alias>:fs' is set.
   [label]           Snapshot label to filter/create (default: frequently).
   [keep_fallback]   Default number of snapshots to keep if not configured (default: 10).
@@ -52,7 +52,7 @@ Advanced Flags:
   --help, -h        Show this help message.
 
 Configuration Mode (--config):
-  $(basename "$0") <dataset> --config [subcommand]
+  $(basename "$0") <filesystem> --config [subcommand]
 
   --list            (Default) List all 'zep:' properties.
   --clear <key>     Remove a specific property (e.g., smtp:port).
@@ -133,24 +133,24 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Assign positional arguments
-if [[ ${#positional_args[@]} -gt 0 ]]; then raw_dataset="${positional_args[0]}"; fi
+if [[ ${#positional_args[@]} -gt 0 ]]; then raw_filesystem="${positional_args[0]}"; fi
 if [[ ${#positional_args[@]} -gt 1 ]]; then label="${positional_args[1]}"; fi
 if [[ ${#positional_args[@]} -gt 2 ]]; then keep_fallback="${positional_args[2]}"; fi
 
-if [[ "$STATUS_MODE" != true ]]; then if [[ "$STATUS_MODE" != true && "$GET_STATE_MODE" != true ]]; then [[ -n "$raw_dataset" ]] || usage; fi; fi
+if [[ "$STATUS_MODE" != true ]]; then if [[ "$STATUS_MODE" != true && "$GET_STATE_MODE" != true ]]; then [[ -n "$raw_filesystem" ]] || usage; fi; fi
 
-# Early local dataset resolution
-my_hostname=$(get_local_alias "$raw_dataset" "$CLI_ALIAS")
+# Early local filesystem resolution
+my_hostname=$(get_local_alias "$raw_filesystem" "$CLI_ALIAS")
 
 # Resolve local pool name from node-specific property (e.g., zep:node:<alias>:fs=node1-pool/data1)
-configured_ds=$(get_zfs_prop "zep:node:${my_hostname}:fs" "$raw_dataset")
+configured_ds=$(get_zfs_prop "zep:node:${my_hostname}:fs" "$raw_filesystem")
 
 if [[ -n "$configured_ds" && "$configured_ds" != "-" ]]; then
     local_ds="$configured_ds"
 else
     # Fallback to legacy or simple pool/ds resolution
-    ds_name="${raw_dataset#*/}"
-    configured_pool=$(get_zfs_prop "zep:node:${my_hostname}:fs" "$raw_dataset")
+    ds_name="${raw_filesystem#*/}"
+    configured_pool=$(get_zfs_prop "zep:node:${my_hostname}:fs" "$raw_filesystem")
     if [[ -n "$configured_pool" && "$configured_pool" != "-" ]]; then
         if [[ "$configured_pool" == *"/"* ]]; then
             local_ds="$configured_pool"
@@ -159,26 +159,26 @@ else
         fi
     else
         # Last resort fallback: use the provided name directly
-        local_ds="$raw_dataset"
-        REPL_CHAIN=$(get_zfs_prop "zep:chain" "$raw_dataset")
+        local_ds="$raw_filesystem"
+        REPL_CHAIN=$(get_zfs_prop "zep:chain" "$raw_filesystem")
     fi
 fi
 
 if [[ "$CASCADED" != true ]]; then
-    expected_ds=$(get_zfs_prop "zep:node:${my_hostname}:fs" "$raw_dataset")
+    expected_ds=$(get_zfs_prop "zep:node:${my_hostname}:fs" "$raw_filesystem")
     if [[ -n "$expected_ds" && "$expected_ds" != "-" ]]; then
         if [[ ! "$local_ds" =~ ^"$expected_ds" ]]; then
-            echo -e "${C_YELLOW}⚠️  Dataset $local_ds is not managed by node $my_hostname (configured: $expected_ds)${C_RESET}"
+            echo -e "${C_YELLOW}⚠️  Filesystem $local_ds is not managed by node $my_hostname (configured: $expected_ds)${C_RESET}"
             exit 1
         fi
     fi
 fi
 
-dataset=$local_ds # Ensure helper functions use the local path
+filesystem=$local_ds # Ensure helper functions use the local path
 
 # Handle Status logic
 if [[ "$STATUS_MODE" == true ]]; then
-    cmd_status "$raw_dataset"
+    cmd_status "$raw_filesystem"
     exit $?
 fi
 
@@ -200,8 +200,8 @@ handle_config() {
     }
 
     if [[ ${#args[@]} -eq 0 || "${args[0]}" == "--list" ]]; then
-        echo "  📋 Current Configuration for $dataset:"
-        zfs get all -H -o property,value "$dataset" | grep "^zep:" | sed 's/^zep://' | sort | awk -F'\t' '{ printf "      %-30s %s\n", $1, $2 }'
+        echo "  📋 Current Configuration for $filesystem:"
+        zfs get all -H -o property,value "$filesystem" | grep "^zep:" | sed 's/^zep://' | sort | awk -F'\t' '{ printf "      %-30s %s\n", $1, $2 }'
         return
     fi
 
@@ -214,7 +214,7 @@ handle_config() {
             [[ -z "$fname" || "$fname" == -* ]] && die "Missing filename for --export"
             
             echo "  💾 Exporting configuration to $fname..."
-            zfs get all -H -o property,value "$dataset" | grep "^zep:" | awk -F'\t' '{print $1"="$2}' > "$fname"
+            zfs get all -H -o property,value "$filesystem" | grep "^zep:" | awk -F'\t' '{print $1"="$2}' > "$fname"
             i=$((i + 2))
             continue
         fi
@@ -235,8 +235,8 @@ handle_config() {
                     
                     key=$(expand_shorthand "$key")
                     
-                    echo "  ⚙️  Setting $key=$val on $dataset"
-                    zfs set "$key=$val" "$dataset" || echo "    ⚠️  Failed to set $key"
+                    echo "  ⚙️  Setting $key=$val on $filesystem"
+                    zfs set "$key=$val" "$filesystem" || echo "    ⚠️  Failed to set $key"
                 fi
             done < "$fname"
             i=$((i + 2))
@@ -249,8 +249,8 @@ handle_config() {
             
             local full_key=$(expand_shorthand "$key")
 
-            echo "  ⚙️  Clearing $full_key from $dataset..."
-            zfs inherit "$full_key" "$dataset" || echo "    ⚠️  Failed to clear $full_key"
+            echo "  ⚙️  Clearing $full_key from $filesystem..."
+            zfs inherit "$full_key" "$filesystem" || echo "    ⚠️  Failed to clear $full_key"
             i=$((i + 2))
             continue
         fi
@@ -261,8 +261,8 @@ handle_config() {
             
             local full_key=$(expand_shorthand "$key")
             
-            echo "  ⚙️  Setting $full_key=$val on $dataset"
-            zfs set "$full_key"="$val" "$dataset" || echo "    ⚠️  Failed to set $full_key"
+            echo "  ⚙️  Setting $full_key=$val on $filesystem"
+            zfs set "$full_key"="$val" "$filesystem" || echo "    ⚠️  Failed to set $full_key"
         else
             echo "  ⚠️  Ignoring invalid config argument: $arg (Expected key=value)"
         fi
@@ -293,7 +293,7 @@ if [[ "$SUSPEND" == true || "$RESUME" == true ]]; then
         VAL="false"
     fi
 
-    echo "  🛡️  ${ACTION} replication for $raw_dataset..."
+    echo "  🛡️  ${ACTION} replication for $raw_filesystem..."
     
     CURRENT_CHAIN=$(get_zfs_prop "zep:chain" "$local_ds")
     if [[ -z "$CURRENT_CHAIN" ]]; then
@@ -304,12 +304,12 @@ if [[ "$SUSPEND" == true || "$RESUME" == true ]]; then
     for n in "${nodes[@]}"; do
         n_fqdn=$(resolve_node_fqdn "$n" "$local_ds")
         n_user=$(resolve_node_user "$n" "$local_ds")
-        n_ds=$(resolve_node_dataset "$n" "$local_ds")
+        n_ds=$(resolve_node_filesystem "$n" "$local_ds")
         echo "    ⏳ Setting zep:suspend=$VAL on $n ($n_fqdn)..."
         ssh "${n_user}@${n_fqdn}" "zfs set zep:suspend=$VAL ${n_ds}" || echo "  Warning: Failed to set property on $n"
     done
     
-    send_smtp_alert "info" "NOTICE: ZFS Replication has been ${ACTION} for dataset $raw_dataset on $my_hostname. Master node: ${nodes[0]}. New state: zep:suspend=$VAL"
+    send_smtp_alert "info" "NOTICE: ZFS Replication has been ${ACTION} for filesystem $raw_filesystem on $my_hostname. Master node: ${nodes[0]}. New state: zep:suspend=$VAL"
     exit 0
 fi
 
@@ -325,9 +325,9 @@ sync_promotion_props() {
     echo "  ⚙️  Syncing replication properties..."
     for n in "${target_nodes[@]}"; do
         [[ "$n" == "$my_hostname" ]] && continue
-        local n_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
-        local n_user=$(resolve_node_user "$n" "$raw_dataset")
-        local n_ds=$(resolve_node_dataset "$n" "$raw_dataset")
+        local n_fqdn=$(resolve_node_fqdn "$n" "$raw_filesystem")
+        local n_user=$(resolve_node_user "$n" "$raw_filesystem")
+        local n_ds=$(resolve_node_filesystem "$n" "$raw_filesystem")
         echo -n "    - $n ($n_fqdn)... "
         
         ssh "${n_user}@${n_fqdn}" "bash -s" <<EOF >/dev/null 2>&1
@@ -390,9 +390,9 @@ if [[ "$PROMOTE" == true ]]; then
             echo "  🔍 Verifying snapshot @$TARGET_SNAP consistency..."
             for n in "${NEW_NODES[@]}"; do
                 echo -n "    - $n... "
-                local_ds_target=$(resolve_node_dataset "$n" "$raw_dataset")
-                local_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
-                local_user=$(resolve_node_user "$n" "$raw_dataset")
+                local_ds_target=$(resolve_node_filesystem "$n" "$raw_filesystem")
+                local_fqdn=$(resolve_node_fqdn "$n" "$raw_filesystem")
+                local_user=$(resolve_node_user "$n" "$raw_filesystem")
                 g=$(ssh "${local_user}@${local_fqdn}" "zfs get -H -o value guid ${local_ds_target}@$TARGET_SNAP" 2>/dev/null)
                 if [[ -n "$g" && "$g" != "-" ]]; then
                     echo "✅"
@@ -410,9 +410,9 @@ if [[ "$PROMOTE" == true ]]; then
             
             for n in "${NEW_NODES[@]}"; do
                 echo -n "    - Querying $n... "
-                local_ds_target=$(resolve_node_dataset "$n" "$raw_dataset")
-                local_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
-                local_user=$(resolve_node_user "$n" "$raw_dataset")
+                local_ds_target=$(resolve_node_filesystem "$n" "$raw_filesystem")
+                local_fqdn=$(resolve_node_fqdn "$n" "$raw_filesystem")
+                local_user=$(resolve_node_user "$n" "$raw_filesystem")
                 node_target="${local_user}@${local_fqdn}"
 
                 node_tmp="/tmp/zfs-node-snaps.$$"
@@ -483,9 +483,9 @@ if [[ "$PROMOTE" == true ]]; then
             echo "  🔄 Rolling back reachable nodes to @$TARGET_SNAP..."
             for n in "${REACHABLE_NODES[@]}"; do
                 echo -n "    - $n... "
-                local_ds_target=$(resolve_node_dataset "$n" "$raw_dataset")
-                local_fqdn=$(resolve_node_fqdn "$n" "$raw_dataset")
-                local_user=$(resolve_node_user "$n" "$raw_dataset")
+                local_ds_target=$(resolve_node_filesystem "$n" "$raw_filesystem")
+                local_fqdn=$(resolve_node_fqdn "$n" "$raw_filesystem")
+                local_user=$(resolve_node_user "$n" "$raw_filesystem")
                 if [[ "$n" == "$my_hostname" ]]; then
                     zfs rollback -r "${local_ds_target}@$TARGET_SNAP" && echo "✅" || die "ERR: Local rollback failed"
                 else
@@ -495,7 +495,7 @@ if [[ "$PROMOTE" == true ]]; then
             
             echo "  ✨ Updating local chain configuration..."
             zfs set zep:chain="$NEW_CHAIN" "$local_ds"
-            send_smtp_alert "info" "NOTICE: Node $my_hostname has been PROMOTED to Master for dataset $raw_dataset. New chain: $NEW_CHAIN"
+            send_smtp_alert "info" "NOTICE: Node $my_hostname has been PROMOTED to Master for filesystem $raw_filesystem. New chain: $NEW_CHAIN"
 
             sync_promotion_props "$local_ds" "NEW_NODES"
             exit 0
@@ -506,7 +506,7 @@ if [[ "$PROMOTE" == true ]]; then
     if [[ "$PROMOTE" == true ]]; then
         echo "  ✨ Updating local chain configuration..."
         zfs set zep:chain="$NEW_CHAIN" "$local_ds"
-        send_smtp_alert "info" "NOTICE: Node $my_hostname has been PROMOTED to Master for dataset $raw_dataset. New chain: $NEW_CHAIN"
+        send_smtp_alert "info" "NOTICE: Node $my_hostname has been PROMOTED to Master for filesystem $raw_filesystem. New chain: $NEW_CHAIN"
 
         sync_promotion_props "$local_ds" "NEW_NODES"
         exit 0
@@ -518,7 +518,7 @@ if [[ -n "$sync_props_data" && "$PROMOTE" != true ]]; then
     if zfs list "$local_ds" >/dev/null 2>&1; then
         apply_repl_props "$local_ds" "$sync_props_data"
     else
-        echo "INFO: Dataset $local_ds not found, skipping property sync (likely initial run)."
+        echo "INFO: Filesystem $local_ds not found, skipping property sync (likely initial run)."
     fi
 fi
 
@@ -575,7 +575,7 @@ if [[ -n "$REPL_CHAIN" ]]; then
     
     dry_flag=""
     [[ "$DRY_RUN" == true ]] && dry_flag=" [DRY RUN]"
-    echo -e "${CHAIN_PREFIX}${C_CYAN}🏁 Start${C_RESET}${dry_flag}: $(date); Dataset: $local_ds; Label: $label"
+    echo -e "${CHAIN_PREFIX}${C_CYAN}🏁 Start${C_RESET}${dry_flag}: $(date); Filesystem: $local_ds; Label: $label"
     
     RESOLVED_KEEP=$(resolve_retention "$local_ds" "$label" "$keep_fallback")
     echo -e "${CHAIN_PREFIX}  ${C_BLUE}🛡️${C_RESET}  Using dynamic retention for $label: $RESOLVED_KEEP (Role: $( [[ $ME_INDEX -eq 0 ]] && echo "master" || ( [[ $ME_INDEX -eq $((${#nodes[@]}-1)) ]] && echo "sink" || echo "middle" ) ))"
@@ -636,7 +636,7 @@ if [[ "$MARK_ONLY" == true ]]; then
     exit 0
 fi
 
-dataset="$local_ds"
+filesystem="$local_ds"
 
 # 1. Snapshot creation (Master only)
 if [[ "$IS_MASTER" == true && "$CASCADED" == false && "$PROMOTE" == false && -z "$TARGET_NODE" && "$IS_DONOR" == false ]]; then
@@ -695,12 +695,12 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
     hop_node="${NODES_REMAINING[$hop_idx]}"
     hop_idx=$((hop_idx + 1))
     
-    hop_fqdn=$(resolve_node_fqdn "$hop_node" "$raw_dataset")
-    hop_user=$(resolve_node_user "$hop_node" "$raw_dataset")
+    hop_fqdn=$(resolve_node_fqdn "$hop_node" "$raw_filesystem")
+    hop_user=$(resolve_node_user "$hop_node" "$raw_filesystem")
     HOP_TARGET="${hop_user}@${hop_fqdn}"
     
     echo -e "${CHAIN_PREFIX}  ${C_CYAN}🔍 Checking connectivity to $hop_node ($hop_fqdn)...${C_RESET}"
-    NEXT_HOP_POOL=$(resolve_node_pool "$hop_node" "$raw_dataset")
+    NEXT_HOP_POOL=$(resolve_node_pool "$hop_node" "$raw_filesystem")
     if [[ $? -eq 255 ]]; then
         if [[ "$REPL_POLICY" == "resilience" ]]; then
             echo -e "${CHAIN_PREFIX}  ${C_YELLOW}⚠️  WARNING:${C_RESET} Node $hop_node is unreachable (Pre-flight). Skipping due to policy=resilience..."
@@ -762,16 +762,16 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
             echo -e "${CHAIN_PREFIX}  ${C_RED}❌ ERROR:${C_RESET} Already acting as donor, skipping recursive discovery."
             DONOR_NODE=""
         else
-            DONOR_NODE=$(find_best_donor "$hop_node" "$raw_dataset")
+            DONOR_NODE=$(find_best_donor "$hop_node" "$raw_filesystem")
         fi
 
         if [[ -n "$DONOR_NODE" ]]; then
-            donor_fqdn=$(resolve_node_fqdn "$DONOR_NODE" "$raw_dataset")
-            donor_user=$(resolve_node_user "$DONOR_NODE" "$raw_dataset")
+            donor_fqdn=$(resolve_node_fqdn "$DONOR_NODE" "$raw_filesystem")
+            donor_user=$(resolve_node_user "$DONOR_NODE" "$raw_filesystem")
             donor_target="${donor_user}@${donor_fqdn}"
 
             echo -e "${CHAIN_PREFIX}  ${C_GREEN}✅ SUCCESS:${C_RESET} Found donor peer '$DONOR_NODE' ($donor_fqdn). Delegating healing of '$hop_node'..."
-            if ssh "$donor_target" "$ZEPLICATOR_CMD $raw_dataset $label $keep_fallback --alias $DONOR_NODE --target $hop_node --donor"; then
+            if ssh "$donor_target" "$ZEPLICATOR_CMD $raw_filesystem $label $keep_fallback --alias $DONOR_NODE --target $hop_node --donor"; then
                 echo -e "${CHAIN_PREFIX}  ${C_GREEN}✅ Delegated replication from $DONOR_NODE to $hop_node successful.${C_RESET}"
                 
                 # RETRY local replication now that common ground should exist
@@ -825,7 +825,7 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
             fi
 
             # We pass the prefix to maintain the visual tree across SSH hops
-            DOWNSTREAM_OUT=$(timeout "$((REPL_TIMEOUT + 5))" ssh -o ConnectTimeout="$REPL_SSH_TIMEOUT" "$HOP_TARGET" "export CHAIN_PREFIX=\"${CHAIN_PREFIX}\"; $ZEPLICATOR_CMD $raw_dataset $label $keep_fallback $casc_opts --sync-props $PROPS_ARG --snap-list \"$MY_ARRIVED\" --cascaded" 2>&1)
+            DOWNSTREAM_OUT=$(timeout "$((REPL_TIMEOUT + 5))" ssh -o ConnectTimeout="$REPL_SSH_TIMEOUT" "$HOP_TARGET" "export CHAIN_PREFIX=\"${CHAIN_PREFIX}\"; $ZEPLICATOR_CMD $raw_filesystem $label $keep_fallback $casc_opts --sync-props $PROPS_ARG --snap-list \"$MY_ARRIVED\" --cascaded" 2>&1)
             SSH_STATUS=$?
             
             # Extract HINT_EXPORT if present and remove it from standard output

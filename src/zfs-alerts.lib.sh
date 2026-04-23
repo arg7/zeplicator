@@ -5,20 +5,20 @@
 send_smtp_alert() {
     local level=${1:-warn}
     local msg=$2
-    local host=$(get_zfs_prop "zep:smtp_host" "$dataset")
-    local port=$(get_zfs_prop "zep:smtp_port" "$dataset")
-    local user=$(get_zfs_prop "zep:smtp_user" "$dataset")
-    local pass=$(get_zfs_prop "zep:smtp_password" "$dataset")
-    local from=$(get_zfs_prop "zep:smtp_from" "$dataset")
-    local to=$(get_zfs_prop "zep:smtp_to" "$dataset")
-    local proto=$(get_zfs_prop "zep:smtp_protocol" "$dataset")
+    local host=$(get_zfs_prop "zep:smtp_host" "$filesystem")
+    local port=$(get_zfs_prop "zep:smtp_port" "$filesystem")
+    local user=$(get_zfs_prop "zep:smtp_user" "$filesystem")
+    local pass=$(get_zfs_prop "zep:smtp_password" "$filesystem")
+    local from=$(get_zfs_prop "zep:smtp_from" "$filesystem")
+    local to=$(get_zfs_prop "zep:smtp_to" "$filesystem")
+    local proto=$(get_zfs_prop "zep:smtp_protocol" "$filesystem")
     
     [[ -z "$host" || -z "$to" ]] && return
 
     # --- Rate Limiting Logic ---
     local state_dir="/tmp/zfs-repl-alerts"
     mkdir -p "$state_dir"
-    local ds_safe="${dataset//\//-}"
+    local ds_safe="${filesystem//\//-}"
     local state_file="${state_dir}/${ds_safe}.state"
     local msg_hash=$(echo -n "${level}:${msg}" | md5sum | awk '{print $1}')
     
@@ -33,7 +33,7 @@ send_smtp_alert() {
     fi
 
     local current_time=$(date +%s)
-    local threshold_str=$(get_zfs_prop "zep:alert:${level}:threshold" "$dataset")
+    local threshold_str=$(get_zfs_prop "zep:alert:${level}:threshold" "$filesystem")
     local threshold=0
     if [[ "$threshold_str" != "-" ]]; then
         threshold=$(parse_time_to_seconds "$threshold_str")
@@ -79,7 +79,7 @@ send_smtp_alert() {
          --upload-file - <<EOF
 From: $from
 To: $to
-Subject: ZFS Replication Alert: $dataset on ${ME:-${my_hostname:-$(hostname)}}
+Subject: ZFS Replication Alert: $filesystem on ${ME:-${my_hostname:-$(hostname)}}
 Date: $(date -R)
 
 $msg

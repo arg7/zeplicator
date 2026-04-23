@@ -15,11 +15,11 @@ get_node_state() {
             echo "ZPOOL:$line"
         done
 
-        # 2. Datasets with zep: properties
+        # 2. Filesystems with zep: properties
         zfs list -H -o name -r "'$raw_ds'" 2>/dev/null | while read -r ds; do
             props=$(zfs get all -H -o property,value "$ds" 2>/dev/null | grep "^zep:")
             if [[ -n "$props" ]]; then
-                # Find unique labels for this dataset
+                # Find unique labels for this filesystem
                 snap_list=$(zfs list -t snap -o name,creation -p -H -S creation -r "$ds" 2>/dev/null | grep "zeplicator_")
                 labels=$(echo "$snap_list" | awk "{print \$1}" | cut -d"@" -f2 | cut -d"_" -f2 | cut -d"-" -f1 | sort -u)
                 for label in $labels; do
@@ -40,7 +40,7 @@ get_node_state() {
                         now=$(date +%s)
                         if [[ -n "$then" ]]; then
                             age=$(( (now - then) / 60 ))
-                            echo "DATASET|$ds|$label|$snap_name|$age|$is_configured|$heartbeat"
+                            echo "FILESYSTEM|$ds|$label|$snap_name|$age|$is_configured|$heartbeat"
                         fi
                     fi
                 done
@@ -63,30 +63,30 @@ get_node_state() {
 }
 
 cmd_status() {
-    local raw_dataset="$1"
+    local raw_filesystem="$1"
     
-    if [[ -z "$raw_dataset" ]]; then
-        readarray -t datasets < <(zfs list -H -o name | while read ds; do if zfs get -H -o value zep:chain "$ds" 2>/dev/null | grep -qv "^-$"; then echo "$ds"; fi; done)
-        [[ ${#datasets[@]} -eq 0 ]] && die "ERR: No datasets with zep:chain found."
-        raw_dataset="${datasets[0]}"
+    if [[ -z "$raw_filesystem" ]]; then
+        readarray -t filesystems < <(zfs list -H -o name | while read ds; do if zfs get -H -o value zep:chain "$ds" 2>/dev/null | grep -qv "^-$"; then echo "$ds"; fi; done)
+        [[ ${#filesystems[@]} -eq 0 ]] && die "ERR: No filesystems with zep:chain found."
+        raw_filesystem="${filesystems[0]}"
     fi
-    REPL_CHAIN=$(get_zfs_prop "zep:chain" "$raw_dataset")
+    REPL_CHAIN=$(get_zfs_prop "zep:chain" "$raw_filesystem")
     [[ -z "$REPL_CHAIN" ]] && die "ERR: No replication chain found."
     IFS=',' read -r -a nodes <<< "$REPL_CHAIN"
     
     local global_exit_code=0
 
     for n in "${nodes[@]}"; do
-        node_ds=$(resolve_node_dataset "$n" "$raw_dataset")
+        node_ds=$(resolve_node_filesystem "$n" "$raw_filesystem")
         out=$(get_node_state "$n" "$node_ds")
         
         node_reachable=$?
         
         zpools=$(echo "$out" | grep "^ZPOOL:" | cut -d':' -f2-)
-        datasets_raw=$(echo "$out" | grep "^DATASET|")
+        filesystems_raw=$(echo "$out" | grep "^FILESYSTEM|")
         
-        # Pre-evaluate dataset colors to allow hierarchical bubbling
-        datasets=""
+        # Pre-evaluate filesystem colors to allow hierarchical bubbling
+        filesystems=""
         while read -r line; do
             [[ -z "$line" ]] && continue
             IFS='|' read -r _ _ label _ age conf hb <<< "$line"
@@ -110,10 +110,10 @@ cmd_status() {
             fi
             
             c=$C_GREEN; [[ $age -ge $((hb*5)) ]] && c=$C_YELLOW; [[ $age -ge $((hb*10)) ]] && c=$C_RED
-            datasets+="${line}|${c}"$'\n'
-        done <<< "$datasets_raw"
+            filesystems+="${line}|${c}"$'\n'
+        done <<< "$filesystems_raw"
 
-        relevant_pools=$(echo "$datasets" | cut -d'|' -f2 | cut -d'/' -f1 | sort -u)
+        relevant_pools=$(echo "$filesystems" | cut -d'|' -f2 | cut -d'/' -f1 | sort -u)
         
         # Pre-evaluate Zpool statuses
         pool_max_status=$C_GREEN
@@ -130,8 +130,8 @@ cmd_status() {
         # Aggregate Node status
         n_status=$C_GREEN
         [[ $node_reachable -ne 0 ]] && n_status=$C_RED
-        [[ "$n_status" != "$C_RED" && "$datasets" =~ "$C_RED" ]] && n_status=$C_RED
-        [[ "$n_status" != "$C_RED" && "$datasets" =~ "$C_YELLOW" ]] && n_status=$C_YELLOW
+        [[ "$n_status" != "$C_RED" && "$filesystems" =~ "$C_RED" ]] && n_status=$C_RED
+        [[ "$n_status" != "$C_RED" && "$filesystems" =~ "$C_YELLOW" ]] && n_status=$C_YELLOW
         [[ "$n_status" != "$C_RED" && "$pool_max_status" == "$C_RED" ]] && n_status=$C_RED
         [[ "$n_status" != "$C_RED" && "$pool_max_status" == "$C_YELLOW" ]] && n_status=$C_YELLOW
         
@@ -155,8 +155,8 @@ cmd_status() {
             [[ "$cap" -ge 40 ]] && p_status=$C_YELLOW
             [[ "$cap" -ge 80 ]] && p_status=$C_RED
             
-            # Aggregate from child datasets
-            ds_statuses=$(echo "$datasets" | grep "^DATASET|$p_name")
+            # Aggregate from child filesystems
+            ds_statuses=$(echo "$filesystems" | grep "^FILESYSTEM|$p_name")
             [[ "$p_status" != "$C_RED" && "$ds_statuses" =~ "$C_RED" ]] && p_status=$C_RED
             [[ "$p_status" != "$C_RED" && "$ds_statuses" =~ "$C_YELLOW" ]] && p_status=$C_YELLOW
 
@@ -166,7 +166,7 @@ cmd_status() {
             # but since we already evaluated colors, we just read them.
             while read -r ds; do
                 [[ -z "$ds" ]] && continue
-                ds_lines=$(echo "$datasets" | grep "^DATASET|$ds|")
+                ds_lines=$(echo "$filesystems" | grep "^FILESYSTEM|$ds|")
                 ds_status=$C_GREEN
                 [[ "$ds_lines" =~ "$C_RED" ]] && ds_status=$C_RED
                 [[ "$ds_status" != "$C_RED" && "$ds_lines" =~ "$C_YELLOW" ]] && ds_status=$C_YELLOW
@@ -179,7 +179,7 @@ cmd_status() {
                     age_str=$(format_minutes "$age")
                     [[ "$conf" == "false" ]] && echo -e "      - ${C_DIM}$label${C_RESET}: [$c${age_str}${C_RESET}] ${C_RED}[unconfigured]${C_RESET}" || echo -e "      - $label: [$c${age_str}${C_RESET}]"
                 done <<< "$ds_lines"
-            done < <(echo "$datasets" | grep -E "^DATASET\|${p_name}(\||/)" | cut -d'|' -f2 | sort -u)
+            done < <(echo "$filesystems" | grep -E "^FILESYSTEM\|${p_name}(\||/)" | cut -d'|' -f2 | sort -u)
         done
     done
     
