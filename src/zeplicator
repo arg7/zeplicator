@@ -962,4 +962,5 @@ fi
 dry_done=""
 [[ "$DRY_RUN" == true ]] && dry_done=" [DRY RUN]"
 echo -e "${CHAIN_PREFIX}  ${C_GREEN}✅ Done${C_RESET}${dry_done}: $(date)"
+
 exit 0

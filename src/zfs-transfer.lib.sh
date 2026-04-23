@@ -458,7 +458,7 @@ zfsbud_core() {
            zbud_msg "${C_RED}🚨${C_RESET} Aborting replication to prevent silent data destruction!"
            
            # Generate specific rollback hint
-           local hint_msg="HINT: Data divergence (Split-Brain) detected on ${hop_node:-destination} ${remote_ds} filesystem.|HINT_NL|"
+           local hint_msg="${C_BOLD}HINT: Data divergence (Split-Brain) detected on ${hop_node:-destination} ${remote_ds} filesystem.${C_RESET}|HINT_NL|"
            hint_msg+="To realign the affected node without destroying the rest of the chain,|HINT_NL|"
            hint_msg+="log into ${hop_node:-the destination node} and manually rollback its filesystem to the last common snapshot:|HINT_NL|"
            hint_msg+="  zfs rollback -r ${remote_ds}@${last_snapshot_common}"
