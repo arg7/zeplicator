@@ -168,7 +168,7 @@ if [[ "$CASCADED" != true ]]; then
     expected_ds=$(get_zfs_prop "zep:node:${my_hostname}:fs" "$raw_filesystem")
     if [[ -n "$expected_ds" && "$expected_ds" != "-" ]]; then
         if [[ ! "$local_ds" =~ ^"$expected_ds" ]]; then
-            echo -e "${C_YELLOW}⚠️  Filesystem $local_ds is not managed by node $my_hostname (configured: $expected_ds)${C_RESET}"
+            echo -e "${C_YELLOW}⚠️${C_RESET}  Filesystem $local_ds is not managed by node $my_hostname (configured: $expected_ds)"
             exit 1
         fi
     fi
@@ -540,12 +540,12 @@ if [[ -n "$REPL_CHAIN" ]]; then
             n_fqdn=$(resolve_node_fqdn "$n" "$local_ds")
             n_user=$(resolve_node_user "$n" "$local_ds")
             
-            echo -e "${CHAIN_PREFIX}    ${C_CYAN}🔍 Checking $n ($n_fqdn)...${C_RESET}"
+            echo -e "${CHAIN_PREFIX}    ${C_CYAN}🔍${C_RESET} Checking $n ($n_fqdn)..."
             if ! timeout "$((REPL_SSH_TIMEOUT + 5))" ssh -o ConnectTimeout="$REPL_SSH_TIMEOUT" -o BatchMode=yes "${n_user}@${n_fqdn}" "which mbuffer >/dev/null && which zstd >/dev/null"; then
                 die "Missing dependencies (mbuffer or zstd) or connection timeout on node: $n ($n_fqdn). Please install them before proceeding with --initial."
             fi
         done
-        echo -e "${CHAIN_PREFIX}  ${C_GREEN}✅ All nodes verified.${C_RESET}"
+        echo -e "${CHAIN_PREFIX}  ${C_GREEN}✅${C_RESET} All nodes verified."
     fi
 
     NODES_REMAINING=()
@@ -575,7 +575,7 @@ if [[ -n "$REPL_CHAIN" ]]; then
     
     dry_flag=""
     [[ "$DRY_RUN" == true ]] && dry_flag=" [DRY RUN]"
-    echo -e "${CHAIN_PREFIX}${C_CYAN}🏁 Start${C_RESET}${dry_flag}: $(date); Filesystem: $local_ds; Label: $label"
+    echo -e "${CHAIN_PREFIX}${C_CYAN}🏁${C_RESET} Start${dry_flag}: $(date); Filesystem: $local_ds; Label: $label"
     
     RESOLVED_KEEP=$(resolve_retention "$local_ds" "$label" "$keep_fallback")
     echo -e "${CHAIN_PREFIX}  ${C_BLUE}🛡️${C_RESET}  Using dynamic retention for $label: $RESOLVED_KEEP (Role: $( [[ $ME_INDEX -eq 0 ]] && echo "master" || ( [[ $ME_INDEX -eq $((${#nodes[@]}-1)) ]] && echo "sink" || echo "middle" ) ))"
@@ -699,7 +699,7 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
     hop_user=$(resolve_node_user "$hop_node" "$raw_filesystem")
     HOP_TARGET="${hop_user}@${hop_fqdn}"
     
-    echo -e "${CHAIN_PREFIX}  ${C_CYAN}🔍 Checking connectivity to $hop_node ($hop_fqdn)...${C_RESET}"
+    echo -e "${CHAIN_PREFIX}  ${C_CYAN}🔍${C_RESET} Checking connectivity to $hop_node ($hop_fqdn)..."
     NEXT_HOP_POOL=$(resolve_node_pool "$hop_node" "$raw_filesystem")
     if [[ $? -eq 255 ]]; then
         if [[ "$REPL_POLICY" == "resilience" ]]; then
@@ -710,7 +710,7 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
         fi
     fi
     
-    echo -e "${CHAIN_PREFIX}  ${C_CYAN}🚀 Attempting replication:${C_RESET} $local_ds -> $HOP_TARGET (Pool: $NEXT_HOP_POOL)..."
+    echo -e "${CHAIN_PREFIX}  ${C_CYAN}🚀${C_RESET} Attempting replication: $local_ds -> $HOP_TARGET (Pool: $NEXT_HOP_POOL)..."
     zfsbud_opts=""
     if [[ "$initial_send" == true ]]; then zfsbud_opts="-i"; fi
     if [[ "$DRY_RUN" == true ]]; then zfsbud_opts="${zfsbud_opts} -d"; fi
@@ -720,7 +720,7 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
     ZBUD_STATUS=$?
 
     if [[ $ZBUD_STATUS -eq 0 ]]; then
-        echo -e "${CHAIN_PREFIX}  ${C_GREEN}✅ Replication to $HOP_TARGET successful.${C_RESET}"
+        echo -e "${CHAIN_PREFIX}  ${C_GREEN}✅${C_RESET} Replication to $HOP_TARGET successful."
         TRANSFER_DONE=true
     elif [[ $ZBUD_STATUS -eq 2 ]]; then
         HAD_SPLIT_BRAIN=true
@@ -772,12 +772,12 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
 
             echo -e "${CHAIN_PREFIX}  ${C_GREEN}✅ SUCCESS:${C_RESET} Found donor peer '$DONOR_NODE' ($donor_fqdn). Delegating healing of '$hop_node'..."
             if ssh "$donor_target" "$ZEPLICATOR_CMD $raw_filesystem $label $keep_fallback --alias $DONOR_NODE --target $hop_node --donor"; then
-                echo -e "${CHAIN_PREFIX}  ${C_GREEN}✅ Delegated replication from $DONOR_NODE to $hop_node successful.${C_RESET}"
+                echo -e "${CHAIN_PREFIX}  ${C_GREEN}✅${C_RESET} Delegated replication from $DONOR_NODE to $hop_node successful."
                 
                 # RETRY local replication now that common ground should exist
-                echo -e "${CHAIN_PREFIX}  ${C_YELLOW}🔄 Retrying local replication to $hop_node...${C_RESET}"
+                echo -e "${CHAIN_PREFIX}  ${C_YELLOW}🔄${C_RESET} Retrying local replication to $hop_node..."
                 if zfsbud_core $zfsbud_opts -s "$NEXT_HOP_POOL" -e "ssh $HOP_TARGET" -v "$local_ds"; then
-                    echo -e "${CHAIN_PREFIX}  ${C_GREEN}✅ Local replication retry successful.${C_RESET}"
+                    echo -e "${CHAIN_PREFIX}  ${C_GREEN}✅${C_RESET} Local replication retry successful."
                     TRANSFER_DONE=true
                 else
                     echo -e "${CHAIN_PREFIX}  ${C_RED}❌ ERROR:${C_RESET} Local replication retry failed after donor healing."
