@@ -118,9 +118,11 @@ resolve_proc_timeout() {
 
 log_message() {
     local msg="$1"
-    local alias=$(hostname)
+    local alias=${CLI_ALIAS:-$(hostname)}
     local log_file="/var/log/zeplicator-${alias}.log"
-    echo -e "$(date '+%Y-%m-%d %H:%M:%S') [$alias] $msg" | sed 's/\x1b\[[0-9;]*m//g' >> "$log_file" 2>/dev/null || true
+    # Strip ANSI codes, non-ASCII (emojis), and leading space/pipes
+    local clean_msg=$(echo -e "$msg" | sed 's/\x1b\[[0-9;]*m//g' | perl -CS -pe 's/[^\x20-\x7E]//g' | sed -e 's/^[[:space:]|]*//')
+    echo -e "$(date '+%Y-%m-%d %H:%M:%S') [$alias] $clean_msg" >> "$log_file" 2>/dev/null || true
 }
 
 parse_time_to_seconds() {
@@ -272,11 +274,11 @@ init_colors
 zbud_msg() { 
     local msg="${CHAIN_PREFIX}    $*"
     echo -e "$msg" 1>&2
-    local alias=$(hostname)
+    local alias=${CLI_ALIAS:-$(hostname)}
     local log_file="/var/log/zeplicator-${alias}.log"
-    # Strip ANSI colors/formatting for the log file
-    # We use echo -e then sed to ensure escape codes are processed then stripped
-    echo -e "$(date '+%Y-%m-%d %H:%M:%S') [$alias] $msg" | sed 's/\x1b\[[0-9;]*m//g' >> "$log_file" 2>/dev/null || true
+    # Strip ANSI codes, non-ASCII (emojis), and leading space/pipes from the message
+    local clean_msg=$(echo -e "$*" | sed 's/\x1b\[[0-9;]*m//g' | perl -CS -pe 's/[^\x20-\x7E]//g' | sed -e 's/^[[:space:]|]*//')
+    echo -e "$(date '+%Y-%m-%d %H:%M:%S') [$alias] $clean_msg" >> "$log_file" 2>/dev/null || true
 }
 zbud_warn() { zbud_msg "  ${C_YELLOW}⚠️  WARNING:${C_RESET} $*"; }
 
