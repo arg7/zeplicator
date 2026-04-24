@@ -55,7 +55,7 @@ tmux send-keys -t "$SESSION_NAME:0.1" "$SCRIPT_DIR/smtp_debug.py 1025 --show-mai
 # We'll default to monitoring the dataset on the first node
 DATASET_TO_WATCH="zep-node-1/test-1"
 ZEP_BIN="$SCRIPT_DIR/../build/zep"
-tmux send-keys -t "$SESSION_NAME:0.2" "watch --color -n 10 $ZEP_BIN $DATASET_TO_WATCH --status --force-color" C-m
+tmux send-keys -t "$SESSION_NAME:0.2" "watch --color -n 10 $ZEP_BIN $DATASET_TO_WATCH --status --force-color --alias node1" C-m
 
 # Set up right lower pane (Pane 3) - Traffic / Network simulator
 tmux send-keys -t "$SESSION_NAME:0.3" "clear" C-m
