@@ -71,7 +71,7 @@ send_smtp_alert() {
         rm -f /tmp/zfs-replication.err
     fi
 
-    echo "  📧 Sending alert email to $to..."
+    zbud_msg "  📧 Sending alert email to $to..."
     curl -s --url "${proto:-smtps}://${host}:${port:-465}" \
          --user "${user}:${pass}" \
          --mail-from "$from" \

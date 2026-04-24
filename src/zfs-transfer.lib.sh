@@ -382,7 +382,8 @@ zfsbud_core() {
        if [ -n "$initial" ]; then
           send_initial "$remote_ds" || return 1
        else
-          zbud_warn "No common snapshots for $local_ds. Use -i for initial."
+          zbud_warn "No common snapshots for $local_ds."
+          send_smtp_alert "warning" "WARNING: No common snapshots for $local_ds to $remote_ds."
           return 1
        fi
     else
@@ -400,7 +401,7 @@ zfsbud_core() {
            found_common="false"
            prev="$common"
            found_divergence="false"
-           report="🚨 Divergence report:\n"
+           report=""
            
            while read -r name written; do
                [[ -z "$name" ]] && continue
@@ -411,11 +412,11 @@ zfsbud_core() {
                # We are after common snap
                if [[ "$written" != "0" && "$written" != "-" ]]; then
                    found_divergence="true"
-                   report+="    - $name written $written, diff:\n"
+                   report+="- $name written $written, diff:\n"
                    zfs mount "$ds" 2>/dev/null
-                   diff_text=$(zfs diff "$prev" "$name" 2>/dev/null | head -n 15 | awk "{print \"      |  \" \$0}")
+                   diff_text=$(zfs diff "$prev" "$name" 2>/dev/null | head -n 15 | awk "{print \"  |  \" \$0}")
                    if [[ -z "$diff_text" ]]; then
-                       diff_text="      |  (No diff output available)"
+                       diff_text="  |  (No diff output available)"
                    fi
                    report+="${diff_text}\n"
                fi
@@ -426,11 +427,11 @@ zfsbud_core() {
            head_written=$(zfs get -H -o value written "$ds" 2>/dev/null)
            if [[ "$head_written" != "0" && "$head_written" != "-" && -n "$head_written" ]]; then
                found_divergence="true"
-               report+="    - $ds (head) written $head_written, diff:\n"
+               report+="- $ds (head) written $head_written, diff:\n"
                zfs mount "$ds" 2>/dev/null
-               diff_text=$(zfs diff "$prev" "$ds" 2>/dev/null | head -n 15 | awk "{print \"      |  \" \$0}")
+               diff_text=$(zfs diff "$prev" "$ds" 2>/dev/null | head -n 15 | awk "{print \"  |  \" \$0}")
                if [[ -z "$diff_text" ]]; then
-                   diff_text="      |  (No diff output available)"
+                   diff_text="  |  (No diff output available)"
                fi
                report+="${diff_text}\n"
            fi
@@ -444,8 +445,7 @@ zfsbud_core() {
            zfs mount "$ds" 2>/dev/null
            generic_diff=$(zfs diff "$common" "$ds" 2>/dev/null | head -n 1)
            if [[ -n "$generic_diff" ]]; then
-               echo -e "🚨 Divergence report:\n - $ds (head) detected via zfs diff, diff:"
-               zfs diff "$common" "$ds" 2>/dev/null | head -n 15 | awk "{print \"   |  \" \$0}"
+               zfs diff "$common" "$ds" 2>/dev/null | head -n 15 | awk "{print \"- $ds (generic diff detected), diff:\n  |  \" \$0}"
                exit 2
            fi
        '
@@ -462,19 +462,27 @@ zfsbud_core() {
        fi
 
        if [[ $diff_status -eq 2 ]]; then
-           zbud_msg "${C_RED}🚨${C_RESET} FATAL: Data divergence (Split-Brain) detected on $remote_ds!"
-           while IFS= read -r line; do zbud_msg "  $line"; done <<< "$diff_output"
-           zbud_msg "${C_RED}🚨${C_RESET} Aborting replication to prevent silent data destruction!"
-           
+           zbud_msg "  ${C_RED}🚨${C_RESET} Divergence report:"
+           while IFS= read -r line; do zbud_msg "    $line"; done <<< "$diff_output"
+           zbud_msg "    --- "
+
            # Generate specific rollback hint
-           local hint_msg="${C_BOLD}HINT: Data divergence (Split-Brain) detected on ${hop_node:-destination} ${remote_ds} filesystem.${C_RESET}|HINT_NL|"
-           hint_msg+="To realign the affected node without destroying the rest of the chain,|HINT_NL|"
-           hint_msg+="log into ${hop_node:-the destination node} and manually rollback its filesystem to the last common snapshot:|HINT_NL|"
-           hint_msg+="  zfs rollback -r ${remote_ds}@${last_snapshot_common}"
-           
+           local hint_msg="${C_BOLD}HINT:${C_RESET}|HINT_NL|"
+           hint_msg+="  Data divergence (Split-Brain) detected on ${hop_node:-destination} ${remote_ds} filesystem.|HINT_NL|"
+           hint_msg+="  To realign the affected node without destroying the rest of the chain,|HINT_NL|"
+           hint_msg+="  log into ${hop_node:-the destination node} and manually rollback its filesystem to the last common snapshot:|HINT_NL|"
+           hint_msg+="    zfs rollback -r ${remote_ds}@${last_snapshot_common}"
+
+           # Print hint directly where it happened
+           while IFS= read -r line; do
+               zbud_msg "      ${line//|HINT_NL|/}"
+           done <<< "$(echo -e "${hint_msg//|HINT_NL|/\\n}")"
+           zbud_msg ""
+
            echo "$hint_msg" > /tmp/zfs-replication.hint
-           
+
            # Get offending snapshots if any, to include in the alert
+
            local offending_snaps=""
            local latest_dest_snap=$(echo "${destination_snapshots[-1]}" | awk '{print $1}')
            if [[ "$latest_dest_snap" != *"$last_snapshot_common" ]]; then
@@ -493,8 +501,7 @@ zfsbud_core() {
            if [[ -n "$offending_snaps" ]]; then
                alert_msg+="\n\nFull Snapshot Timeline (after common point):$offending_snaps"
            fi
-           echo -e "$alert_msg" > /tmp/zfs-replication.err
-           send_smtp_alert "critical" "CRITICAL: Split-Brain Data Divergence on $remote_ds"
+           echo -e "$alert_msg\n\n${hint_msg//|HINT_NL|/\\n}" > /tmp/zfs-replication.err
            return 2
        fi
 

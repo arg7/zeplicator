@@ -782,7 +782,7 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
         if [[ "$REPL_POLICY" == "resilience" ]]; then
             if [[ "$hop_node" == "${NODES_REMAINING[-1]}" ]]; then
                 [[ -n "$SPLIT_BRAIN_HINT" && "$CASCADED" == true ]] && echo "HINT_EXPORT:$SPLIT_BRAIN_HINT"
-                die "${C_RED}🚨 FATAL:${C_RESET} Split-Brain detected on Sink node $hop_node. Aborting replication branch." 2
+                die "Split-Brain detected on $hop_node. Aborting entire replication job for safety." 2
             fi
             echo -e "${CHAIN_PREFIX}  ${C_RED}🚨 FATAL:${C_RESET} Split-Brain detected on $hop_node. Skipping due to policy=resilience..."
             [[ -n "$SPLIT_BRAIN_HINT" && "$CASCADED" == true ]] && echo "HINT_EXPORT:$SPLIT_BRAIN_HINT"
@@ -912,13 +912,11 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
                 if [[ "$REPL_POLICY" == "resilience" ]]; then
                     echo -e "${CHAIN_PREFIX}  ${C_YELLOW}⚠️  WARNING:${C_RESET} Split-Brain detected downstream from $hop_node. Skipping affected downstream nodes due to policy=resilience..."
                     # SKIP all nodes that were supposed to be handled by this hop
-                    # In a linear chain, these are all remaining nodes in the REPL_CHAIN after hop_node
-                    # But we only skip nodes that are already in OUR NODES_REMAINING list.
-                    # Since NODES_REMAINING is sorted, we just skip until the end of the chain.
-                    # If we had branching, we'd need more complex logic.
                     break 
                 else
-                    die "🚨 FATAL: Split-Brain detected downstream from $hop_node. Aborting entire replication job." 2
+                    # Downstream already reported the error and sent alerts. 
+                    # We break the loop and exit gracefully at the end with the correct code.
+                    break
                 fi
             fi
 
@@ -956,6 +954,14 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
     fi
 done
 
+# 3. Final State Reporting & Marking
+exit_code=0
+if [[ "$HAD_SPLIT_BRAIN" == true ]]; then
+    exit_code=2
+elif [[ "$REPLICATION_SUCCESS" == false && ${#NODES_REMAINING[@]} -gt 0 ]]; then
+    exit_code=1
+fi
+
 if [[ "$REPLICATION_SUCCESS" == true ]]; then
     if [[ "$DRY_RUN" == true ]]; then
         echo "${CHAIN_PREFIX}  🏷️  [DRY RUN] Would mark local snapshots ($local_ds) as shipped..."
@@ -984,9 +990,7 @@ if [[ "$REPLICATION_SUCCESS" == true ]]; then
         fi
         echo "SENT_LIST:$MY_LIST"
     fi
-elif [[ ${#NODES_REMAINING[@]} -gt 0 ]]; then
-    exit_code=1
-    if [[ "$HAD_SPLIT_BRAIN" == true ]]; then exit_code=2; fi
+elif [[ "$exit_code" -ne 0 && "$HAD_SPLIT_BRAIN" != true ]]; then
     die "ERR: All downstream replication attempts failed for chain: ${NODES_REMAINING[*]}" $exit_code
 else
     if [[ "$IS_DONOR" == true ]]; then
@@ -1023,4 +1027,4 @@ dry_done=""
 [[ "$DRY_RUN" == true ]] && dry_done=" [DRY RUN]"
 echo -e "${CHAIN_PREFIX}  ${C_GREEN}✅ Done${C_RESET}${dry_done}: $(date)"
 
-exit 0
+exit ${exit_code:-0}

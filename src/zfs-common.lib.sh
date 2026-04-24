@@ -278,7 +278,7 @@ zbud_msg() {
     # We use echo -e then sed to ensure escape codes are processed then stripped
     echo -e "$(date '+%Y-%m-%d %H:%M:%S') [$alias] $msg" | sed 's/\x1b\[[0-9;]*m//g' >> "$log_file" 2>/dev/null || true
 }
-zbud_warn() { zbud_msg "${C_YELLOW}⚠️  WARNING:${C_RESET} $*"; }
+zbud_warn() { zbud_msg "  ${C_YELLOW}⚠️  WARNING:${C_RESET} $*"; }
 
 indent_output() {
     sed "s/^/${CHAIN_PREFIX}        /"
@@ -287,7 +287,7 @@ indent_output() {
 die() {
     local msg="$1"
     local exit_code=${2:-1}
-    zbud_msg "${C_RED}❌ ERROR:${C_RESET} $msg"
+    zbud_msg "  ${C_RED}❌ ERROR:${C_RESET} $msg"
 
     if [[ -n "$local_ds" ]]; then
         if type send_smtp_alert >/dev/null 2>&1; then
@@ -295,13 +295,18 @@ die() {
         fi
     fi
     if [[ "$CASCADED" != true ]]; then
-        echo ""
         if [[ -f "/tmp/zfs-replication.hint" ]]; then
-            echo -e "$(cat /tmp/zfs-replication.hint | sed 's/|HINT_NL|/\\n/g')"
+            # Only print from file if it wasn't already printed (exit code 2 means it was likely printed by zfsbud_core)
+            if [[ "$exit_code" -ne 2 ]]; then
+                echo ""
+                echo -e "$(cat /tmp/zfs-replication.hint | sed 's/|HINT_NL|/\\n/g')"
+            fi
             rm -f "/tmp/zfs-replication.hint"
         elif [[ "$exit_code" -eq 1 ]]; then
+            echo ""
             echo -e "${C_BOLD}HINT: If replication failed because there is no common ground:${C_RESET}"
-            echo "  - For a new destination: try adding the '--init' flag."            echo "  - To rebuild an existing broken chain: use '--promote --auto -y' on the Master."
+            echo "  - For a new destination: try adding the '--init' flag."
+            echo "  - To rebuild an existing broken chain: use '--promote --auto -y' on the Master."
             echo "  - To force a fresh start (DANGER): use '--promote --destroy-chain' on the Master."
         fi
     fi
