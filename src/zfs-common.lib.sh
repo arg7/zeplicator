@@ -34,7 +34,7 @@ cache_zfs_prop() {
     local node="$2"
     local ds_safe="${ds//\//-}"
     local prefix=$(get_snap_prefix "$ds")
-    PROP_CACHE_FILE="/tmp/${prefix}-${node}-prop-cache-${ds_safe}-${$}.txt"
+    PROP_CACHE_FILE="/tmp/${prefix}${node}-prop-cache-${ds_safe}-${$}.txt"
     export PROP_CACHE_FILE
     # Capture all zep: properties, excluding node-specific and transient state like 'shipped'
     zfs get all -H -o property,value "$ds" 2>/dev/null | grep "^zep:" | grep -vE ":(shipped|alias|suspend)$" > "$PROP_CACHE_FILE" || true
@@ -143,7 +143,7 @@ log_message() {
     local msg="$1"
     local alias=${CLI_ALIAS:-$(hostname)}
     local prefix=${REPL_SNAP_PREFIX:-zep_}
-    local log_file="/var/log/${prefix}-${alias}.log"
+    local log_file="/var/log/${prefix}${alias}.log"
     # Strip ANSI codes, non-ASCII (emojis), and leading space/pipes
     local clean_msg=$(echo -e "$msg" | sed 's/\x1b\[[0-9;]*m//g' | perl -CS -pe 's/[^\x20-\x7E]//g' | sed -e 's/^[[:space:]|]*//')
     if [[ ! "$clean_msg" =~ ^(INFO|WARNING|ERROR|AUDIT|REPLICATION|ROTATION): ]]; then
@@ -303,7 +303,7 @@ zbud_msg() {
     echo -e "$msg" 1>&2
     local alias=${CLI_ALIAS:-$(hostname)}
     local prefix=${REPL_SNAP_PREFIX:-zep_}
-    local log_file="/var/log/${prefix}-${alias}.log"
+    local log_file="/var/log/${prefix}${alias}.log"
     # Strip ANSI codes, non-ASCII (emojis), and leading space/pipes from the message
     local clean_msg=$(echo -e "$*" | sed 's/\x1b\[[0-9;]*m//g' | perl -CS -pe 's/[^\x20-\x7E]//g' | sed -e 's/^[[:space:]|]*//')
     if [[ ! "$clean_msg" =~ ^(INFO|WARNING|ERROR|AUDIT|REPLICATION|ROTATION): ]]; then
@@ -330,7 +330,7 @@ die() {
     if [[ "$CASCADED" != true ]]; then
         local alias_val=${CLI_ALIAS:-$(hostname)}
         local prefix=$(get_snap_prefix "$local_ds")
-        local hint_file="/tmp/${prefix}-${alias_val}-replication.hint"
+        local hint_file="/tmp/${prefix}${alias_val}-replication.hint"
         if [[ -f "$hint_file" ]]; then
             # Only print from file if it wasn't already printed (exit code 2 means it was likely printed by zfsbud_core)
             if [[ "$exit_code" -ne 2 ]]; then
@@ -357,7 +357,7 @@ cleanup() {
 check_stuck_job() {
     local alias_val=${CLI_ALIAS:-$(hostname)}
     local prefix=$(get_snap_prefix "$filesystem")
-    local lock_name="${prefix}-${alias_val}-${filesystem//\//-}-${label}.lock"
+    local lock_name="${prefix}${alias_val}-${filesystem//\//-}-${label}.lock"
     LOCKFILE="/tmp/${lock_name}"
     export LOCKFILE
     

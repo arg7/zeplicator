@@ -234,8 +234,8 @@ zfsbud_core() {
 
       local prefix=$(get_snap_prefix "$filesystem")
       local alias_val=${CLI_ALIAS:-$(hostname)}
-      local lock_path="${LOCKFILE:-/tmp/${prefix}-${alias_val}-default.lock}"
-      local err_log="/tmp/${prefix}-${alias_val}-replication.err"
+      local lock_path="${LOCKFILE:-/tmp/${prefix}${alias_val}-default.lock}"
+      local err_log="/tmp/${prefix}${alias_val}-replication.err"
       > "${lock_path}.cnt" # Reset counter
       > "$err_log" # Clear log
 
@@ -297,8 +297,8 @@ zfsbud_core() {
     if [ -z "$dry_run" ]; then
       local prefix=$(get_snap_prefix "$filesystem")
       local alias_val=${CLI_ALIAS:-$(hostname)}
-      local lock_path="${LOCKFILE:-/tmp/${prefix}-${alias_val}-default.lock}"
-      local err_log="/tmp/${prefix}-${alias_val}-replication.err"
+      local lock_path="${LOCKFILE:-/tmp/${prefix}${alias_val}-default.lock}"
+      local err_log="/tmp/${prefix}${alias_val}-replication.err"
       > "${lock_path}.cnt" # Reset counter
 
       if [ -n "$remote_shell" ]; then
@@ -505,7 +505,7 @@ zfsbud_core() {
            done <<< "$(echo -e "${hint_msg//|HINT_NL|/\\n}")"
            zbud_msg ""
 
-           echo "$hint_msg" > "/tmp/${prefix}-${alias_val}-replication.hint"
+           echo "$hint_msg" > "/tmp/${prefix}${alias_val}-replication.hint"
 
            # Get offending snapshots if any, to include in the alert
 
@@ -527,7 +527,7 @@ zfsbud_core() {
            if [[ -n "$offending_snaps" ]]; then
                alert_msg+="\n\nFull Snapshot Timeline (after common point):$offending_snaps"
            fi
-           echo -e "$alert_msg\n\n${hint_msg//|HINT_NL|/\\n}" > "/tmp/${prefix}-${alias_val}-replication.err"
+           echo -e "$alert_msg\n\n${hint_msg//|HINT_NL|/\\n}" > "/tmp/${prefix}${alias_val}-replication.err"
            return 2
        fi
 
