@@ -654,8 +654,8 @@ fi
 # --- END HEARTBEAT MONITORING ---
 
 if [[ "$IS_MASTER" == false && "$CASCADED" == false && "$PROMOTE" == false && "$MARK_ONLY" == false && -z "$TARGET_NODE" && "$IS_DONOR" == false ]]; then
-    echo "${CHAIN_PREFIX}  ℹ️  Node $ME is not Master. Skipping initiation (Cron safety)."
-    exit 0
+    echo "${CHAIN_PREFIX}  ❌ ERROR: Node $ME is not Master. Cannot initiate replication."
+    exit 1
 fi
 
 if [[ "$IS_MASTER" == true && "$CASCADED" == false && "$PROMOTE" == false && -z "$TARGET_NODE" ]]; then

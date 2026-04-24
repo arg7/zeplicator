@@ -45,8 +45,7 @@ tmux split-window -v -l 30% -t "$SESSION_NAME:0.0" 2>/dev/null || tmux split-win
 
 # Set up left main pane (Pane 0)
 tmux send-keys -t "$SESSION_NAME:0.0" "clear" C-m
-tmux send-keys -t "$SESSION_NAME:0.0" "echo '=== Main Test Window ==='" C-m
-tmux send-keys -t "$SESSION_NAME:0.0" "echo 'Run your test scripts or interact with zep here.'" C-m
+tmux send-keys -t "$SESSION_NAME:0.0" "$SCRIPT_DIR/zep_test_loop.sh" C-m
 
 # Set up left lower pane (Pane 1) - SMTP Server
 tmux send-keys -t "$SESSION_NAME:0.1" "clear" C-m
