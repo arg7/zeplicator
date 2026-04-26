@@ -191,7 +191,6 @@ zfsbud_core() {
     local remote_ds="$1"
     local is_initial="$2"
     local local_ds="$filesystem"
-    local timeout_val=$(resolve_proc_timeout "$filesystem")
     local ssh_t=$(resolve_ssh_timeout "$filesystem")
 
     # Extract snapshot info
@@ -281,15 +280,15 @@ zfsbud_core() {
     local status=0
     if [ -n "$remote_shell" ]; then
       if [[ "$is_initial" == "true" ]]; then
-        ! timeout "$timeout_val" bash -c "set -o pipefail; zfs send $send_args \"$latest_snapshot_source\" 2>>$err_log | iomon \"$lock_path\" 1 | mbuffer -q $mbuffer_throttle -m \"$mbuffer_size\" 2>>$err_log | zstd 2>>$err_log | $remote_shell -o ConnectTimeout=\"$ssh_t\" \"zstd -d | zfs recv $recv_args $remote_ds\" 2>>$err_log" && status=1
+        ! bash -c "set -o pipefail; zfs send $send_args \"$latest_snapshot_source\" 2>>$err_log | iomon \"$lock_path\" 1 | mbuffer -q $mbuffer_throttle -m \"$mbuffer_size\" 2>>$err_log | zstd 2>>$err_log | $remote_shell -o ConnectTimeout=\"$ssh_t\" \"zstd -d | zfs recv $recv_args $remote_ds\" 2>>$err_log" && status=1
       else
         set -o pipefail
-        timeout "$timeout_val" bash -c "set -o pipefail; zfs send $send_args \"$latest_snapshot_source\" 2>>$err_log | iomon \"$lock_path\" 1 | mbuffer -q $mbuffer_throttle -m \"$mbuffer_size\" 2>>$err_log | zstd 2>>$err_log | $remote_shell -o ConnectTimeout=\"$ssh_t\" \"zstd -d | zfs recv $recv_args $remote_ds\" 2>>$err_log"
+        bash -c "set -o pipefail; zfs send $send_args \"$latest_snapshot_source\" 2>>$err_log | iomon \"$lock_path\" 1 | mbuffer -q $mbuffer_throttle -m \"$mbuffer_size\" 2>>$err_log | zstd 2>>$err_log | $remote_shell -o ConnectTimeout=\"$ssh_t\" \"zstd -d | zfs recv $recv_args $remote_ds\" 2>>$err_log"
         status=$?
         set +o pipefail
       fi
     else
-      ! timeout "$timeout_val" bash -c "set -o pipefail; zfs send $send_args \"$latest_snapshot_source\" 2>>$err_log | iomon \"$lock_path\" 1 | zfs recv $recv_args \"$remote_ds\" 2>>$err_log" && status=1
+      ! bash -c "set -o pipefail; zfs send $send_args \"$latest_snapshot_source\" 2>>$err_log | iomon \"$lock_path\" 1 | zfs recv $recv_args \"$remote_ds\" 2>>$err_log" && status=1
     fi
 
     # Error handling for incremental transfers

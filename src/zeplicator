@@ -227,6 +227,13 @@ validate_args
 # Cache ZFS properties early — before any get_zfs_prop calls
 cache_zfs_props "$raw_filesystem"
 
+# If we received properties from upstream (e.g., initial sync), seed the cache 
+# so we can correctly resolve local_ds and chain info even if the dataset 
+# doesn't exist yet or is named differently.
+if [[ -n "$sync_props_data" ]]; then
+    seed_cache_from_encoded "$raw_filesystem" "$sync_props_data"
+fi
+
 # Early local filesystem resolution
 my_hostname=$(get_local_alias "$raw_filesystem" "$CLI_ALIAS")
 
@@ -249,6 +256,11 @@ else
         # Last resort fallback: use the provided name directly
         local_ds="$raw_filesystem"
     fi
+fi
+
+# If we have synced props, also seed the cache for the resolved local_ds
+if [[ -n "$sync_props_data" && "$local_ds" != "$raw_filesystem" ]]; then
+    seed_cache_from_encoded "$local_ds" "$sync_props_data"
 fi
 
 if [[ "$CASCADED" != true ]]; then
@@ -312,7 +324,7 @@ sync_chain_props() {
             export PROP_CACHE_FILE="/tmp/\${prefix}\${n}-prop-cache-\${ds_safe}-\\\$\\\$.txt"
             trap 'rm -f "\$PROP_CACHE_FILE"' EXIT
             zfs get all -H -o property,value "\$n_ds" 2>/dev/null | grep "^zep:" | grep -vE ":(shipped|alias|suspend)\$" > "\$PROP_CACHE_FILE" || true
-            IFS=';' read -ra props <<< "$props_decoded"
+            IFS=$'\x1e' read -ra props <<< "$props_decoded"
             for p in "\${props[@]}"; do
                 [[ -z "\$p" ]] && continue
                 k="\${p%%=*}"
@@ -1174,7 +1186,9 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
 
             PROPS_ARG=""
             if [[ "$initial_send" == true ]]; then
-                PROPS_ARG="--sync-props $(get_repl_props_encoded "$local_ds")"
+                # Use passed-in props if available (avoids re-calculating and fixes sync in initial runs)
+                props_to_pass="${sync_props_data:-$(get_repl_props_encoded "$local_ds")}"
+                PROPS_ARG="--sync-props $props_to_pass"
             fi
             
             # Internal list of what arrived here (including virtual snaps)

@@ -291,17 +291,22 @@ resolve_node_filesystem() {
 
 get_repl_props_encoded() {
     local ds=$1
+    local RS=$'\x1e'
     local props=""
     # Use in-memory cache if populated, otherwise query ZFS directly
     if [[ ${#ZEP_PROP_CACHE[@]} -gt 0 ]]; then
         for key in "${!ZEP_PROP_CACHE[@]}"; do
             [[ "$key" == "${ds}:zep:"* ]] || continue
             local prop="${key#${ds}:}"
-            [[ "$prop" =~ :(shipped|alias|suspend)$ ]] && continue
-            props+="${prop}=${ZEP_PROP_CACHE[$key]};"
+            props+="${prop}=${ZEP_PROP_CACHE[$key]}${RS}"
         done
     else
-        props=$(zfs get all -H -o property,value "$ds" | grep "^zep:" | grep -vE ":(shipped|alias|suspend)$" | awk '{print $1"="$2}' | tr '\n' ';')
+        # Use \x1e (record separator) as delimiter since values can contain ; or spaces
+        local raw
+        raw=$(zfs get all -H -o property,value "$ds" | grep "^zep:" | awk -F'\t' '{print $1"="$2}')
+        while IFS= read -r line; do
+            props+="${line}${RS}"
+        done <<< "$raw"
     fi
     echo -n "$props" | base64 -w 0
 }
@@ -312,8 +317,14 @@ apply_repl_props() {
     [[ -z "$encoded" ]] && return
 
     echo -e "${CHAIN_PREFIX}  ${C_DIM}⚙️${C_RESET}  Syncing replication properties for $ds..."
-    local decoded=$(echo -n "$encoded" | base64 -d)
-    IFS=';' read -ra props <<< "$decoded"
+    local decoded
+    decoded=$(echo -n "$encoded" | base64 -d 2>/dev/null)
+    local rc=$?
+    if [[ $rc -ne 0 || -z "$decoded" ]]; then
+        echo -e "${CHAIN_PREFIX}    ${C_RED}⚠️  Failed to decode properties${C_RESET}"
+        return
+    fi
+    IFS=$'\x1e' read -ra props <<< "$decoded"
     for p in "${props[@]}"; do
         if [[ -n "$p" ]]; then
             local prop_key="${p%%=*}"
@@ -322,14 +333,32 @@ apply_repl_props() {
             local current_val=$(get_zfs_prop "$prop_key" "$ds")
             local new_val="${p#*=}"
             if [[ "$current_val" != "$new_val" ]]; then
-                if [[ "$DRY_RUN" == true ]]; then
+                 if [[ "$DRY_RUN" == true ]]; then
                     echo -e "${CHAIN_PREFIX}    [DRY RUN] Would update $prop_key -> $new_val"
-                else
+                 else
                     echo -e "${CHAIN_PREFIX}    Updating $prop_key -> $new_val"
                     zfs set "$p" "$ds" || echo -e "${CHAIN_PREFIX}    ${C_YELLOW}⚠️  WARNING:${C_RESET} Failed to set $p"
-                fi
+                 fi
             fi
         fi
+    done
+}
+
+seed_cache_from_encoded() {
+    local ds=$1
+    local encoded=$2
+    [[ -z "$encoded" ]] && return
+    
+    local decoded
+    decoded=$(echo -n "$encoded" | base64 -d 2>/dev/null)
+    [[ -z "$decoded" ]] && return
+    
+    IFS=$'\x1e' read -ra props <<< "$decoded"
+    for p in "${props[@]}"; do
+        [[ -z "$p" ]] && continue
+        local k="${p%%=*}"
+        local v="${p#*=}"
+        ZEP_PROP_CACHE["${ds}:${k}"]="$v"
     done
 }
 
