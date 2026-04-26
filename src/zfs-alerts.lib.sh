@@ -5,6 +5,14 @@
 send_smtp_alert() {
     local level=${1:-warn}
     local msg=$2
+    shift 2 || true
+    local include_detail=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --detail) include_detail=true ;;
+        esac
+        shift
+    done
     local host=$(get_zfs_prop "zep:smtp_host" "$filesystem")
     local port=$(get_zfs_prop "zep:smtp_port" "$filesystem")
     local user=$(get_zfs_prop "zep:smtp_user" "$filesystem")
@@ -16,9 +24,7 @@ send_smtp_alert() {
     [[ -z "$host" || -z "$to" ]] && return
 
     # --- Rate Limiting Logic ---
-    local alias_val=${CLI_ALIAS:-$(hostname)}
-    local prefix=$(get_snap_prefix "$filesystem")
-    local state_dir="/tmp/${prefix}${alias_val}-repl-alerts"
+    local state_dir="${REPL_ALERTS_DIR:?REPL_ALERTS_DIR not set}"
     mkdir -p "$state_dir"
     local ds_safe="${filesystem//\//-}"
     local state_file="${state_dir}/${ds_safe}.state"
@@ -66,12 +72,14 @@ send_smtp_alert() {
     fi
     # --- End Rate Limiting Logic ---
 
-    # Include captured error details if they exist
+    # Include captured error details if requested and they exist
     local detail=""
-    local err_log="/tmp/${prefix}${alias_val}-replication.err"
-    if [[ -f "$err_log" ]]; then
-        detail=$(cat "$err_log")
-        rm -f "$err_log"
+    if [[ "$include_detail" == true ]]; then
+        local err_log="${REPL_ERR_FILE:?REPL_ERR_FILE not set}"
+        if [[ -f "$err_log" ]]; then
+            detail=$(cat "$err_log")
+            rm -f "$err_log"
+        fi
     fi
 
     zbud_msg "  📧 Sending alert email to $to..."
@@ -87,9 +95,9 @@ Date: $(date -R)
 
 $msg
 $rate_limit_notice
-
+${detail:+
 --- Details ---
-${detail:-No specific error details captured.}
+${detail}}
 EOF
 
     # Update state file with new sent time and reset counter

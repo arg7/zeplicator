@@ -266,7 +266,9 @@ zfsbud_core() {
     local prefix=$(get_snap_prefix "$filesystem")
     local alias_val=${CLI_ALIAS:-$(hostname)}
     local lock_path="${LOCKFILE:-/tmp/${prefix}${alias_val}-default.lock}"
-    local err_log="/tmp/${prefix}${alias_val}-replication.err"
+    local err_log="${REPL_ERR_FILE:?REPL_ERR_FILE not set}"
+
+    # Clear stale error log from previous runs or filesystems
     > "${lock_path}.cnt"
     > "$err_log"
 
@@ -335,10 +337,8 @@ zfsbud_core() {
     local_ds="$filesystem"
     local remote_ds=""
     
-    local prefix=$(get_snap_prefix "$filesystem")
-    local alias_val=${CLI_ALIAS:-$(hostname)}
-    local err_log="/tmp/${prefix}${alias_val}-replication.err"
-    
+    local err_log="${REPL_ERR_FILE:?REPL_ERR_FILE not set}"
+
     # Clear stale error log from previous runs or filesystems
     > "$err_log"
 
@@ -489,7 +489,7 @@ zfsbud_core() {
            done <<< "$(echo -e "${hint_msg//|HINT_NL|/\\n}")"
            zbud_msg ""
 
-           echo "$hint_msg" > "/tmp/${prefix}${alias_val}-replication.hint"
+           echo "$hint_msg" > "${REPL_HINT_FILE:?REPL_HINT_FILE not set}"
 
            # Get offending snapshots if any, to include in the alert
 
@@ -506,13 +506,13 @@ zfsbud_core() {
                    fi
                done
            fi
-           
+
            local alert_msg="CRITICAL: Split-Brain Data Divergence on $remote_ds\n$diff_output"
            if [[ -n "$offending_snaps" ]]; then
                alert_msg+="\n\nFull Snapshot Timeline (after common point):$offending_snaps"
            fi
            alert_msg+="\n\n${hint_msg//|HINT_NL|/\\n}"
-           echo -e "$alert_msg" > "/tmp/${prefix}${alias_val}-replication.err"
+           echo -e "$alert_msg" > "${REPL_ERR_FILE:?REPL_ERR_FILE not set}"
            return 2
        fi
 

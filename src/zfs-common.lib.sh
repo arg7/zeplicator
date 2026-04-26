@@ -381,24 +381,33 @@ indent_output() {
 die() {
     local msg="$1"
     local exit_code=${2:-1}
+    shift 2 || true
+    local detail_flag=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --detail) detail_flag="--detail" ;;
+        esac
+        shift
+    done
     zbud_msg "  ${C_RED}❌ ERROR:${C_RESET} $msg"
 
     if [[ -n "$local_ds" ]]; then
         if type send_smtp_alert >/dev/null 2>&1; then
-            send_smtp_alert "critical" "ERROR: $msg"
+            if [[ -n "$detail_flag" ]]; then
+                send_smtp_alert "critical" --detail "ERROR: $msg"
+            else
+                send_smtp_alert "critical" "ERROR: $msg"
+            fi
         fi
     fi
     if [[ "$CASCADED" != true ]]; then
-        local alias_val=${CLI_ALIAS:-$(hostname)}
-        local prefix=$(get_snap_prefix "$local_ds")
-        local hint_file="/tmp/${prefix}${alias_val}-replication.hint"
-        if [[ -f "$hint_file" ]]; then
+        if [[ -f "$REPL_HINT_FILE" ]]; then
             # Only print from file if it wasn't already printed (exit code 2 means it was likely printed by zfsbud_core)
             if [[ "$exit_code" -ne 2 ]]; then
                 echo ""
-                echo -e "$(cat "$hint_file" | sed 's/|HINT_NL|/\\n/g')"
+                echo -e "$(cat "$REPL_HINT_FILE" | sed 's/|HINT_NL|/\\n/g')"
             fi
-            rm -f "$hint_file"
+            rm -f "$REPL_HINT_FILE"
         elif [[ "$exit_code" -eq 1 ]]; then
             echo ""
             echo -e "${C_BOLD}HINT: If replication failed because there is no common ground:${C_RESET}"
@@ -412,6 +421,7 @@ die() {
 
 cleanup() {
     [[ -n "$LOCKFILE" ]] && rm -f "$LOCKFILE" "${LOCKFILE}.cnt"
+    [[ -n "$REPL_ERR_FILE" ]] && rm -f "$REPL_ERR_FILE"
 }
 
 check_stuck_job() {
