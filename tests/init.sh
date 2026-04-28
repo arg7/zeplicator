@@ -30,6 +30,9 @@ else
     echo "Ramdisk mounted at $RAMDISK"
 fi
 
+# Clean up stale temp files from previous runs
+rm -rf /tmp/zep_* 2>/dev/null || true
+
 # Ensure build/zep is ready
 echo "Building zep..."
 make -C "$SCRIPT_DIR/.." > /dev/null
