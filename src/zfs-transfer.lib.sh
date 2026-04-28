@@ -318,11 +318,11 @@ zfsbud_core() {
     local send_args recv_args label_msg
     if [[ "$is_initial" == "true" ]]; then
       send_args="-R -v"
-      recv_args=""
+      recv_args="-o canmount=noauto"
       label_msg="initial"
     else
       send_args="-p $recursive_send -i \"$local_ds@$last_snapshot_common\" -v"
-      recv_args=""
+      recv_args="-o canmount=noauto"
       label_msg="incremental: $last_snapshot_common -> $snap_name"
     fi
 
