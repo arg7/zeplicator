@@ -175,7 +175,7 @@ for i in $(seq 1 "$NUM_NODES"); do
     fi
     # Start authorized_keys with root's pubkey so master can connect
     # Detect root's actual key type (ed25519, rsa, ecdsa)
-    local root_pubkey=""
+    root_pubkey=""
     for kt in id_ed25519 id_rsa id_ecdsa; do
         if [[ -f "/root/.ssh/${kt}.pub" ]]; then
             root_pubkey="/root/.ssh/${kt}.pub"
