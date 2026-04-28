@@ -910,12 +910,8 @@ if [[ -n "$REPL_CHAIN" ]]; then
     done
     [[ $ME_INDEX -eq -1 ]] && die "ERR: Host $ME is not part of the replication chain for $local_ds"
     
-    if [[ -z "$CHAIN_PREFIX" ]]; then
-        for (( i=0; i<ME_INDEX; i++ )); do
-            CHAIN_PREFIX+="  | "
-        done
-    else
-        # If passed from upstream, add one more level
+    if [[ "$CASCADED" == true ]]; then
+        # Running as downstream hop — indent one level deeper than upstream
         CHAIN_PREFIX+="  | "
     fi
     
