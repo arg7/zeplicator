@@ -93,9 +93,13 @@ zfs:rate=$ZFS_RATE
 EOF
 
 # Add node definitions to master config
+# Master (node1) uses root, chain nodes use dedicated zep-user accounts
 for j in $(seq 1 "$NUM_NODES"); do
     echo "node:node$j:fqdn=zep-node-$j.local" >> "$CONFIG_FILE"
     echo "node:node$j:fs=zep-node-$j/test-$j" >> "$CONFIG_FILE"
+    if [[ $j -ne 1 ]]; then
+        echo "node:node$j:user=zep-user-$j" >> "$CONFIG_FILE"
+    fi
 done
 
 echo "Initializing $NUM_NODES nodes with $POOL_SIZE pools..."
@@ -139,7 +143,78 @@ for i in $(seq 1 "$NUM_NODES"); do
     fi
 
     echo "Successfully created $DATASET_NAME"
+
+    # Create dedicated replication user for all nodes with minimal ZFS rights
+    ZEP_USER="zep-user-$i"
+    echo "  Setting up $ZEP_USER with minimal ZFS rights..."
+
+    # Create user if not exists
+    if ! id "$ZEP_USER" >/dev/null 2>&1; then
+        useradd -m -s /bin/bash "$ZEP_USER" 2>/dev/null || \
+        adduser --disabled-password --gecos "" "$ZEP_USER" 2>/dev/null || true
+    fi
+
+    # Generate SSH key for the zep-user if not already present
+    ZEP_HOME=$(getent passwd "$ZEP_USER" | cut -d: -f6)
+    [[ -z "$ZEP_HOME" ]] && ZEP_HOME="/home/$ZEP_USER"
+    ZEP_SSH_DIR="$ZEP_HOME/.ssh"
+    mkdir -p "$ZEP_SSH_DIR"
+    if [[ ! -f "$ZEP_SSH_DIR/id_rsa" ]]; then
+        ssh-keygen -t rsa -b 2048 -f "$ZEP_SSH_DIR/id_rsa" -N "" -q
+    fi
+    # Start authorized_keys with root's pubkey so master can connect
+    if [[ -f /root/.ssh/id_rsa.pub ]]; then
+        cp /root/.ssh/id_rsa.pub "$ZEP_SSH_DIR/authorized_keys"
+    fi
+    chown -R "$ZEP_USER:$ZEP_USER" "$ZEP_SSH_DIR"
+    chmod 700 "$ZEP_SSH_DIR"
+    chmod 600 "$ZEP_SSH_DIR/id_rsa" "$ZEP_SSH_DIR/authorized_keys"
+    chmod 644 "$ZEP_SSH_DIR/id_rsa.pub"
+
+    # Delegate minimal ZFS permissions for replication
+    # Pool-level: create/mount needed for zfs recv to create new datasets
+    zfs allow "$ZEP_USER" create,mount "$POOL_NAME"
+    # Dataset-level: all other replication permissions
+    zfs allow "$ZEP_USER" send,receive,snapshot,destroy,hold,release,mount,rollback,userprop "$DATASET_NAME"
+
+    # Prevent auto-mount on chain nodes so zfs recv doesn't fail on unmount permission
+    if [[ $i -ne 1 ]]; then
+        zfs set canmount=noauto "$DATASET_NAME"
+        zfs unmount "$DATASET_NAME" 2>/dev/null || true
+    fi
+
+    echo "  ✅ $ZEP_USER set up with delegated ZFS rights on $DATASET_NAME"
 done
+
+# Full mesh SSH: add all zep-users' public keys to each other's authorized_keys
+echo "Setting up full-mesh SSH auth between zep-users..."
+for i in $(seq 1 "$NUM_NODES"); do
+    ZEP_HOME=$(getent passwd "zep-user-$i" | cut -d: -f6)
+    [[ -z "$ZEP_HOME" ]] && ZEP_HOME="/home/zep-user-$i"
+    for j in $(seq 1 "$NUM_NODES"); do
+        [[ $i -eq $j ]] && continue
+        JHOME=$(getent passwd "zep-user-$j" | cut -d: -f6)
+        [[ -z "$JHOME" ]] && JHOME="/home/zep-user-$j"
+        cat "$JHOME/.ssh/id_rsa.pub" >> "$ZEP_HOME/.ssh/authorized_keys" 2>/dev/null || true
+    done
+    # Also add zep-user's pubkey to root's authorized_keys
+    cat "$ZEP_HOME/.ssh/id_rsa.pub" >> /root/.ssh/authorized_keys 2>/dev/null || true
+done
+
+# Populate known_hosts for all zep-users (copy from root's known_hosts)
+echo "Populating SSH known_hosts for zep-users..."
+for i in $(seq 1 "$NUM_NODES"); do
+    ZEP_USER="zep-user-$i"
+    ZEP_HOME=$(getent passwd "$ZEP_USER" | cut -d: -f6)
+    [[ -z "$ZEP_HOME" ]] && ZEP_HOME="/home/$ZEP_USER"
+    ZEP_SSH_DIR="$ZEP_HOME/.ssh"
+    cp /root/.ssh/known_hosts "$ZEP_SSH_DIR/known_hosts" 2>/dev/null || true
+    chown "$ZEP_USER:$ZEP_USER" "$ZEP_SSH_DIR/known_hosts"
+    chmod 600 "$ZEP_SSH_DIR/known_hosts"
+done
+
+# Clean up stale temp files from previous runs that might block non-root access
+rm -rf /tmp/zep_* 2>/dev/null || true
 
 # Import configuration once on the Master node
 MASTER_DATASET="zep-node-1/test-1"

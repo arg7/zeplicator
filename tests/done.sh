@@ -43,11 +43,24 @@ for i in $(seq 1 "$NUM_NODES"); do
     fi
 done
 
+# Remove zep-user accounts created for all nodes
+for i in $(seq 1 "$NUM_NODES"); do
+    ZEP_USER="zep-user-$i"
+    if id "$ZEP_USER" >/dev/null 2>&1; then
+        echo "  Removing user $ZEP_USER..."
+        userdel -r "$ZEP_USER" 2>/dev/null || \
+        deluser --remove-home "$ZEP_USER" 2>/dev/null || true
+    fi
+done
+
 # Remove the master config file
 CONFIG_FILE="/tmp/zep-master.conf"
 if [[ -f "$CONFIG_FILE" ]]; then
     echo "Removing temporary config file $CONFIG_FILE..."
     rm -f "$CONFIG_FILE"
 fi
+
+# Clean up zep log and temp files
+rm -rf /tmp/zep_* 2>/dev/null || true
 
 echo "Cleanup complete."

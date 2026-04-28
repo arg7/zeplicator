@@ -197,7 +197,7 @@ log_message() {
     local msg="$1"
     local alias=${CLI_ALIAS:-$(hostname)}
     local prefix=${REPL_SNAP_PREFIX:-zep_}
-    local log_file="/var/log/${prefix}${alias}.log"
+    local log_file="/tmp/${prefix}${alias}.log"
     # Strip ANSI codes, non-ASCII (emojis), and leading space/pipes
     local clean_msg=$(echo -e "$msg" | sed 's/\x1b\[[0-9;]*m//g' | perl -CS -pe 's/[^\x20-\x7E]//g' | sed -e 's/^[[:space:]|]*//')
     if [[ ! "$clean_msg" =~ ^(INFO|WARNING|ERROR|AUDIT|REPLICATION|ROTATION): ]]; then
@@ -393,7 +393,7 @@ zbud_msg() {
     echo -e "$msg" 1>&2
     local alias=${CLI_ALIAS:-$(hostname)}
     local prefix=${REPL_SNAP_PREFIX:-zep_}
-    local log_file="/var/log/${prefix}${alias}.log"
+    local log_file="/tmp/${prefix}${alias}.log"
     # Strip ANSI codes, non-ASCII (emojis), and leading space/pipes from the message
     local clean_msg=$(echo -e "$*" | sed 's/\x1b\[[0-9;]*m//g' | perl -CS -pe 's/[^\x20-\x7E]//g' | sed -e 's/^[[:space:]|]*//')
     if [[ ! "$clean_msg" =~ ^(INFO|WARNING|ERROR|AUDIT|REPLICATION|ROTATION): ]]; then

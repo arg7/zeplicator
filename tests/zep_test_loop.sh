@@ -1,9 +1,12 @@
 #!/bin/bash
 
 SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
-ZEP_BIN="$SCRIPT_DIR/../build/zep"
+ZEP_BIN=$(command -v zep)
 DS="zep-node-1/test-1"
 LABEL="min1"
+
+# Clean up stale tmp files from previous runs
+rm -rf /tmp/zep_* 2>/dev/null || true
 
 pause_if_unexpected() {
     local expected=$1
