@@ -283,9 +283,9 @@ zfsbud_core() {
 
         local recv_cmd
         if [ -n "$remote_shell" ]; then
-            recv_cmd="mbuffer -q $mbuffer_throttle -m \"$mbuffer_size\" | zstd | $remote_shell \"zstd -d | zfs recv $resume_recv_args $remote_ds\""
+            recv_cmd="mbuffer -q $mbuffer_throttle -m \"$mbuffer_size\" | zstd | $remote_shell \"zstd -d | zfs recv -u $resume_recv_args $remote_ds\""
         else
-            recv_cmd="zfs recv $resume_recv_args \"$remote_ds\""
+            recv_cmd="zfs recv -u $resume_recv_args \"$remote_ds\""
         fi
 
         local zfs_resume_pipeline="zfs send $verbose -t \"$resume_token\" 2>>\"$err_log\" | iomon \"$lock_path\" 1 $iomon_timeout | $recv_cmd"
@@ -383,10 +383,10 @@ zfsbud_core() {
     # Build recv pipeline tail: remote adds mbuffer + zstd + ssh wrapper; local is bare
     local recv_cmd
     if [ -n "$remote_shell" ]; then
-      local remote_zfs_recv="zstd -d | zfs recv $recv_args $remote_ds"
+      local remote_zfs_recv="zstd -d | zfs recv -u $recv_args $remote_ds"
       recv_cmd="mbuffer -q $mbuffer_throttle -m \"$mbuffer_size\" 2>>\"$err_log\" | zstd 2>>\"$err_log\" | $remote_shell -o ConnectTimeout=\"$ssh_t\" \"$remote_zfs_recv\" 2>>\"$err_log\""
     else
-      recv_cmd="zfs recv $recv_args \"$remote_ds\" 2>>\"$err_log\""
+      recv_cmd="zfs recv -u $recv_args \"$remote_ds\" 2>>\"$err_log\""
     fi
 
     # Build full pipeline command
