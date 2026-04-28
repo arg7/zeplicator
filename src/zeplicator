@@ -139,7 +139,7 @@ while [[ $# -gt 0 ]]; do
             shift
             while [[ $# -gt 0 ]]; do
                 case "$1" in
-                    --list|--clear|--export|--import) config_args+=("$1"); shift ;;
+                    --list|--clear|--export|--import|--all) config_args+=("$1"); shift ;;
                     -*) break ;; # Next main flag
                     *) config_args+=("$1"); shift ;;
                 esac
@@ -435,6 +435,8 @@ handle_config() {
         fi
     }
 
+    local sync_all=false
+
     if [[ ${#args[@]} -eq 0 || "${args[0]}" == "--list" ]]; then
         echo "  📋 Current Configuration for $filesystem:"
         zfs get all -H -o property,value "$filesystem" | grep "^zep:" | sed 's/^zep://' | sort | awk -F'\t' '{ printf "      %-30s %s\n", $1, $2 }'
@@ -445,6 +447,12 @@ handle_config() {
     while [[ $i -lt ${#args[@]} ]]; do
         local arg="${args[i]}"
         
+        if [[ "$arg" == "--all" ]]; then
+            sync_all=true
+            i=$((i + 1))
+            continue
+        fi
+
         if [[ "$arg" == "--export" ]]; then
             local fname="${args[((i+1))]}"
             [[ -z "$fname" || "$fname" == -* ]] && die "Missing filename for --export"
@@ -508,14 +516,16 @@ handle_config() {
     # Refresh cache before syncing to other nodes
     cache_zfs_props "$filesystem"
 
-    # After all changes, sync to the entire chain if it's configured
-    local current_chain=$(get_zfs_prop "zep:chain" "$filesystem")
-    if [[ -n "$current_chain" && "$current_chain" != "-" ]]; then
-        IFS=',' read -r -a nodes <<< "$current_chain"
-        if sync_chain_props "$filesystem" "nodes"; then
-            echo "  🎉 SUCCESS: Configuration updated and synced across the chain."
-        else
-            echo "  ⚠️  PARTIAL SUCCESS: Configuration updated, but some nodes were unreachable during sync."
+    # Only sync to the chain if --all flag was specified
+    if [[ "$sync_all" == true ]]; then
+        local current_chain=$(get_zfs_prop "zep:chain" "$filesystem")
+        if [[ -n "$current_chain" && "$current_chain" != "-" ]]; then
+            IFS=',' read -r -a nodes <<< "$current_chain"
+            if sync_chain_props "$filesystem" "nodes"; then
+                echo "  🎉 SUCCESS: Configuration updated and synced across the chain."
+            else
+                echo "  ⚠️  PARTIAL SUCCESS: Configuration updated, but some nodes were unreachable during sync."
+            fi
         fi
     fi
 }

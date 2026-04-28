@@ -119,6 +119,16 @@ done
 
 echo "Initializing $NUM_NODES nodes with $POOL_SIZE pools..."
 
+# Add /etc/hosts entries for all nodes (mock DNS)
+echo "Adding /etc/hosts entries for zep nodes..."
+for i in $(seq 1 "$NUM_NODES"); do
+    DNS_NAME="zep-node-$i.local"
+    if ! grep -q "$DNS_NAME" /etc/hosts 2>/dev/null; then
+        echo "127.0.0.1 $DNS_NAME" >> /etc/hosts
+        echo "  Added $DNS_NAME"
+    fi
+done
+
 for i in $(seq 1 "$NUM_NODES"); do
     POOL_NAME="zep-node-$i"
     IMG_FILE="$RAMDISK/$POOL_NAME.img"
@@ -164,13 +174,23 @@ for i in $(seq 1 "$NUM_NODES"); do
         ssh-keygen -t rsa -b 2048 -f "$ZEP_SSH_DIR/id_rsa" -N "" -q
     fi
     # Start authorized_keys with root's pubkey so master can connect
-    if [[ -f /root/.ssh/id_rsa.pub ]]; then
-        cp /root/.ssh/id_rsa.pub "$ZEP_SSH_DIR/authorized_keys"
+    # Detect root's actual key type (ed25519, rsa, ecdsa)
+    local root_pubkey=""
+    for kt in id_ed25519 id_rsa id_ecdsa; do
+        if [[ -f "/root/.ssh/${kt}.pub" ]]; then
+            root_pubkey="/root/.ssh/${kt}.pub"
+            break
+        fi
+    done
+    if [[ -n "$root_pubkey" ]]; then
+        cat "$root_pubkey" > "$ZEP_SSH_DIR/authorized_keys"
+    else
+        touch "$ZEP_SSH_DIR/authorized_keys"
     fi
     chown -R "$ZEP_USER:$ZEP_USER" "$ZEP_SSH_DIR"
     chmod 700 "$ZEP_SSH_DIR"
     chmod 600 "$ZEP_SSH_DIR/id_rsa" "$ZEP_SSH_DIR/authorized_keys"
-    chmod 644 "$ZEP_SSH_DIR/id_rsa.pub"
+    chmod 644 "$ZEP_SSH_DIR/id_rsa.pub" 2>/dev/null || true
 
     # Delegate minimal ZFS permissions for replication
     # Pool-level: create+mount needed for zfs recv to create/receive datasets
@@ -195,6 +215,15 @@ for i in $(seq 1 "$NUM_NODES"); do
     # Also add zep-user's pubkey to root's authorized_keys
     cat "$ZEP_HOME/.ssh/id_rsa.pub" >> /root/.ssh/authorized_keys 2>/dev/null || true
 done
+
+# Deduplicate authorized_keys for all zep-users and root
+echo "Deduplicating authorized_keys..."
+for u in $(seq 1 "$NUM_NODES"); do
+    for file in "/home/zep-user-$u/.ssh/authorized_keys"; do
+        [[ -f "$file" ]] && sort -u "$file" -o "$file"
+    done
+done
+sort -u /root/.ssh/authorized_keys -o /root/.ssh/authorized_keys 2>/dev/null || true
 
 # Populate known_hosts for all zep-users (copy from root's known_hosts)
 echo "Populating SSH known_hosts for zep-users..."
