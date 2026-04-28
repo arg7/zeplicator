@@ -350,66 +350,36 @@ zfsbud_core() {
 
             local diff_output=""
             if [[ -n "$remote_shell" ]]; then
-                diff_output=$($remote_shell "zep $remote_ds --divergence-report ${last_snapshot_common:-} 2>&1")
+                diff_output=$($remote_shell "zep $remote_ds --divergence-report ${last_snapshot_common:-}" 2>&1)
             else
                 diff_output=$(divergence_report "$remote_ds" "${last_snapshot_common:-}" 2>&1)
             fi
             [[ -n "$diff_output" ]] && echo "$diff_output" | while IFS= read -r line; do zbud_msg "  |  $line"; done
 
-            if [[ "$REPL_FORCE" == "true" ]]; then
-                zbud_warn "Divergence detected but force=true — retrying with zfs recv -F"
-                local recv_flags_force="${recv_flags/-u /-u -F }"
-                [[ "$recv_flags_force" == "$recv_flags" ]] && recv_flags_force="${recv_flags/u /u -F }"
+            zbud_msg ""
+            while IFS= read -r line; do
+                zbud_msg "    ${line//|/}"
+            done <<< "$(echo -e "${hint_msg//|/\\n}")"
+            zbud_msg ""
+            echo "$hint_msg" > "${REPL_HINT_FILE:?REPL_HINT_FILE not set}"
 
-                local retry_pipeline
-                if [[ -n "$remote_shell" ]]; then
-                    retry_pipeline="zfs send $send_opt 2>>\"$err_log\" | iomon \"$lock_path\" 1 $iomon_timeout | mbuffer -q $mbuffer_throttle -m \"$mbuffer_size\" 2>>\"$err_log\" | zstd 2>>\"$err_log\" | $remote_shell -o ConnectTimeout=\"$ssh_t\" \"zstd -d | zfs recv $recv_flags_force $remote_ds\" 2>>\"$err_log\""
-                else
-                    retry_pipeline="zfs send $send_opt 2>>\"$err_log\" | iomon \"$lock_path\" 1 $iomon_timeout | zfs recv $recv_flags_force \"$remote_ds\" 2>>\"$err_log\""
-                fi
-
-                set -o pipefail
-                eval "$retry_pipeline"
-                status=$?
-                set +o pipefail
-
-                if [[ $status -ne 0 ]]; then
-                    zbud_msg "Force retry also failed with status $status"
-                    if [[ -n "$remote_shell" ]]; then
-                        $remote_shell "zfs set zep:error:split-brain=true $remote_ds" 2>/dev/null
-                    else
-                        zfs set zep:error:split-brain=true "$remote_ds" 2>/dev/null
-                    fi
-                    send_smtp_alert "critical" --detail "Split-Brain on $remote_ds — force retry failed. Manual intervention required."
-                    return $status
-                fi
-                zbud_msg "  ${C_BLUE}✅${C_RESET} Force retry succeeded — destination overwritten."
+            if [[ -n "$remote_shell" ]]; then
+                $remote_shell "zfs set zep:error:split-brain=true $remote_ds" 2>/dev/null && \
+                    zbud_msg "  ${C_CYAN}ℹ️${C_RESET}  Marked $remote_ds on destination with split-brain error flag."
             else
-                zbud_msg ""
-                while IFS= read -r line; do
-                    zbud_msg "    ${line//|/}"
-                done <<< "$(echo -e "${hint_msg//|/\\n}")"
-                zbud_msg ""
-                echo "$hint_msg" > "${REPL_HINT_FILE:?REPL_HINT_FILE not set}"
-
-                if [[ -n "$remote_shell" ]]; then
-                    $remote_shell "zfs set zep:error:split-brain=true $remote_ds" 2>/dev/null && \
-                        zbud_msg "  ${C_CYAN}ℹ️${C_RESET}  Marked $remote_ds on destination with split-brain error flag."
-                else
-                    zfs set zep:error:split-brain=true "$remote_ds" 2>/dev/null && \
-                        zbud_msg "  ${C_CYAN}ℹ️${C_RESET}  Marked $remote_ds with split-brain error flag."
-                fi
-
-                local clean_hint=$(echo -e "${hint_msg//|/\\n}" | sed 's/\x1b\[[0-9;]*m//g')
-                local clean_diff=$(echo -e "$diff_output" | sed 's/\x1b\[[0-9;]*m//g')
-                local plain_alert="CRITICAL: Split-Brain Data Divergence on $remote_ds"
-                plain_alert+=$'\n'
-                plain_alert+="$clean_diff"
-                plain_alert+=$'\n\n'
-                plain_alert+="$clean_hint"
-                send_smtp_alert "critical" "$plain_alert"
-                return 2
+                zfs set zep:error:split-brain=true "$remote_ds" 2>/dev/null && \
+                    zbud_msg "  ${C_CYAN}ℹ️${C_RESET}  Marked $remote_ds with split-brain error flag."
             fi
+
+            local clean_hint=$(echo -e "${hint_msg//|/\\n}" | sed 's/\x1b\[[0-9;]*m//g')
+            local clean_diff=$(echo -e "$diff_output" | sed 's/\x1b\[[0-9;]*m//g')
+            local plain_alert="CRITICAL: Split-Brain Data Divergence on $remote_ds"
+            plain_alert+=$'\n'
+            plain_alert+="$clean_diff"
+            plain_alert+=$'\n\n'
+            plain_alert+="$clean_hint"
+            send_smtp_alert "critical" "$plain_alert"
+            return 2
         elif [[ -s $err_log ]] && ! grep -vq "destination already exists" "$err_log"; then
             zbud_msg "  ⚠️  Destination snapshot already exists. Treating as success."
             status=0
