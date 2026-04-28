@@ -122,26 +122,12 @@ for i in $(seq 1 "$NUM_NODES"); do
     
     zpool create "$POOL_NAME" "$IMG_FILE"
 
-    # Create dataset
+    # Create dataset only on master (node1); chain nodes pre-created for zfs recv
     zfs create "$DATASET_NAME"
-
-    # DNS Registration
-    DNS_NAME="zep-node-$i.local"
-    if ! grep -q "$DNS_NAME" /etc/hosts; then
-        echo "Registering $DNS_NAME to 127.0.0.1 in /etc/hosts"
-        echo "127.0.0.1 $DNS_NAME" >> /etc/hosts
-    else
-        echo "DNS entry for $DNS_NAME already exists."
+    if [[ $i -ne 1 ]]; then
+        zfs set canmount=noauto "$DATASET_NAME"
+        zfs unmount "$DATASET_NAME" 2>/dev/null || true
     fi
-
-    # Add to known_hosts
-    if ! ssh-keygen -F "$DNS_NAME" >/dev/null 2>&1; then
-        echo "Adding $DNS_NAME to ~/.ssh/known_hosts"
-        ssh-keyscan -H "$DNS_NAME" >> ~/.ssh/known_hosts 2>/dev/null
-    else
-        echo "$DNS_NAME is already in known_hosts."
-    fi
-
     echo "Successfully created $DATASET_NAME"
 
     # Create dedicated replication user for all nodes with minimal ZFS rights
@@ -172,21 +158,15 @@ for i in $(seq 1 "$NUM_NODES"); do
     chmod 644 "$ZEP_SSH_DIR/id_rsa.pub"
 
     # Delegate minimal ZFS permissions for replication
-    # Pool-level: create/mount needed for zfs recv to create new datasets
+    # Pool-level: create+mount needed for zfs recv to create/receive datasets
     zfs allow "$ZEP_USER" create,mount "$POOL_NAME"
-    # Dataset-level: all other replication permissions
-    zfs allow "$ZEP_USER" send,receive,snapshot,destroy,hold,release,mount,rollback,userprop "$DATASET_NAME"
+    # Dataset-level: minimal set for send/receive pipeline
+    zfs allow "$ZEP_USER" send,receive,snapshot,hold,release,userprop "$DATASET_NAME"
 
-    # Prevent auto-mount on chain nodes so zfs recv doesn't fail on unmount permission
-    if [[ $i -ne 1 ]]; then
-        zfs set canmount=noauto "$DATASET_NAME"
-        zfs unmount "$DATASET_NAME" 2>/dev/null || true
-    fi
-
-    echo "  ✅ $ZEP_USER set up with delegated ZFS rights on $DATASET_NAME"
+    echo "  ✅ $ZEP_USER set up with delegated ZFS rights on $POOL_NAME"
 done
 
-# Full mesh SSH: add all zep-users' public keys to each other's authorized_keys
+# Full mesh SSH: all zep-users can reach each other (needed for pre-flight + master rotation)
 echo "Setting up full-mesh SSH auth between zep-users..."
 for i in $(seq 1 "$NUM_NODES"); do
     ZEP_HOME=$(getent passwd "zep-user-$i" | cut -d: -f6)
