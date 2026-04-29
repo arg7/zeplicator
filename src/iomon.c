@@ -102,7 +102,7 @@ int main(int argc, char *argv[]) {
             }
             bytes_written += res;
 
-            if (write_rate > 0 && chunk_delay.tv_nsec > 0)
+            if (write_rate > 0 && (chunk_delay.tv_sec > 0 || chunk_delay.tv_nsec > 0))
                 nanosleep(&chunk_delay, NULL);
         }
 

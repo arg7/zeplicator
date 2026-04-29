@@ -391,7 +391,7 @@ zfsbud_core() {
     local recv_extra=$(get_zfs_prop "zep:zfs:recv_opt" "$local_ds")
 
     if [[ -n "$resume_token" ]]; then
-        send_opt="-v${send_extra:+ $send_extra} -t \"$resume_token\""
+        send_opt="-v -t \"$resume_token\""
         recv_opt="-u${recv_extra:+ $recv_extra}"
         transfer_label="resuming"
     else
@@ -434,12 +434,9 @@ zfsbud_core() {
     zbud_msg "  🚀 Sending $transfer_label replication to $remote_ds..."
 
     # --- Build pipeline ---
-    local iomon_rate=""
-    [[ -n "$throttle" && "$throttle" != "-" ]] && iomon_rate="$throttle"
-    log_message "IOMON: lock=$lock_path interval=1 timeout=$iomon_timeout rate=$iomon_rate throttle_prop=$throttle"
-    local mbuf_opt="$mbuffer_throttle"
-    [[ -n "$iomon_rate" ]] && mbuf_opt="-q"  # iomon handles throttling; mbuffer passes through
-    local pipeline="zfs send $send_opt 2>>\"$err_log\" | iomon \"$lock_path\" 1 $iomon_timeout $iomon_rate | mbuffer $mbuf_opt -m \"$mbuffer_size\" 2>>\"$err_log\""
+    local iomon_rate="1k"  # hardcoded for testing resume
+    log_message "IOMON: lock=$lock_path interval=1 timeout=$iomon_timeout rate=$iomon_rate"
+    local pipeline="zfs send $send_opt 2>>\"$err_log\" | iomon \"$lock_path\" 1 $iomon_timeout $iomon_rate | mbuffer $mbuffer_throttle -m \"$mbuffer_size\" 2>>\"$err_log\""
     if [[ -n "$remote_shell" ]]; then
         pipeline+=" | zstd 2>>\"$err_log\" | $remote_shell -o ConnectTimeout=\"$ssh_t\" \"zstd -d | zfs recv $recv_opt $remote_ds\" 2>>\"$err_log\""
     else
@@ -449,6 +446,7 @@ zfsbud_core() {
     # --- Execute ---
     local status=0
     set -o pipefail
+    log_message "PIPELINE: $pipeline"
     eval "$pipeline"
     status=$?
     set +o pipefail
@@ -586,6 +584,12 @@ zfsbud_core() {
                     zbud_msg "  ${C_DIM}ℹ️${C_RESET}  Destination has newer snapshots (e.g. ${latest_dest_snap#*@})."
                 fi
                 send_snapshot "$remote_ds" "false" || return $?
+            elif [ -n "$initial" ]; then
+                send_snapshot "$remote_ds" "true" || return $?
+            else
+                zbud_warn "No common snapshots for $local_ds."
+                send_smtp_alert "warning" "WARNING: No common snapshots for $local_ds to $remote_ds."
+                return 1
             fi
             ;;
         *)

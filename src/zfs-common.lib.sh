@@ -601,9 +601,7 @@ check_stuck_job() {
 
 # High-performance pipe monitor to track bytes and update progress file
 iomon() {
-    local lock="$1"
-    local interval="$2"
-    /usr/local/bin/iomon "$lock" "$interval"
+    /usr/local/bin/iomon "$@"
 }
 
 check_replication_progress() {
