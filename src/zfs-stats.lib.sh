@@ -51,7 +51,12 @@ cmd_stats() {
 
     # 3. Filesystems with zep: properties (under target FS)
     zfs list -H -o name -r "$_target_fs" 2>/dev/null | while read -r ds; do
-        props=$(zfs get all -H -o property,value "$ds" 2>/dev/null | grep "^zep:")
+        # Build props from in-memory cache (populated by cache_zfs_props or --sync-props)
+        props=""
+        for key in "${!ZEP_PROP_CACHE[@]}"; do
+            [[ "$key" == "${ds}:zep:"* ]] || continue
+            props+="${key#${ds}:}"$'\t'"${ZEP_PROP_CACHE[$key]}"$'\n'
+        done
         [[ -z "$props" ]] && continue
 
         prefix=$(echo "$props" | grep "zep:snap_prefix" | cut -f2)

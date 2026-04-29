@@ -36,26 +36,30 @@ declare -A ZEP_PROP_DEFAULTS=(
 
 # Populate the property cache for a dataset
 cache_zfs_props() {
-    local ds="$1"
-    # Seed defaults first, then override with actual ZFS values
-    for key in "${!ZEP_PROP_DEFAULTS[@]}"; do
-        ZEP_PROP_CACHE["${ds}:${key}"]="${ZEP_PROP_DEFAULTS[$key]}"
-    done
-    # Fetch all zep: properties from ZFS (overrides defaults where set)
-    while IFS=$'\t' read -r prop val; do
-        [[ "$val" == "-" ]] && continue  # keep default for unset
-        [[ "$prop" =~ :(shipped|split-brain)$ ]] && continue
-        ZEP_PROP_CACHE["${ds}:${prop}"]="$val"
-    done < <(zfs get all -H -o property,value "$ds" 2>/dev/null | grep "^zep:")
-    # Batch-fetch remaining per-node props in one call (chain node props not yet cached)
-    local chain="${ZEP_PROP_CACHE["${ds}:zep:chain"]:-}"
+    local root_ds="$1"
+    # Seed defaults and fetch zep: properties for root dataset and all children
+    while read -r ds; do
+        [[ -z "$ds" ]] && continue
+        # Seed defaults first, then override with actual ZFS values
+        for key in "${!ZEP_PROP_DEFAULTS[@]}"; do
+            ZEP_PROP_CACHE["${ds}:${key}"]="${ZEP_PROP_DEFAULTS[$key]}"
+        done
+        # Fetch all zep: properties from ZFS (overrides defaults where set)
+        while IFS=$'\t' read -r prop val; do
+            [[ "$val" == "-" ]] && continue  # keep default for unset
+            [[ "$prop" =~ :(shipped|split-brain)$ ]] && continue
+            ZEP_PROP_CACHE["${ds}:${prop}"]="$val"
+        done < <(zfs get all -H -o property,value "$ds" 2>/dev/null | grep "^zep:")
+    done < <(zfs list -H -o name -r "$root_ds" 2>/dev/null)
+    # Batch-fetch remaining per-node props for root dataset only (chain node props not yet cached)
+    local chain="${ZEP_PROP_CACHE["${root_ds}:zep:chain"]:-}"
     if [[ -n "$chain" ]]; then
         IFS=',' read -ra chain_nodes <<< "$chain"
         local node_props=""
         for n in "${chain_nodes[@]}"; do
-            local k_user="${ds}:zep:node:${n}:user"
-            local k_fqdn="${ds}:zep:node:${n}:fqdn"
-            local k_fs="${ds}:zep:node:${n}:fs"
+            local k_user="${root_ds}:zep:node:${n}:user"
+            local k_fqdn="${root_ds}:zep:node:${n}:fqdn"
+            local k_fs="${root_ds}:zep:node:${n}:fs"
             [[ -z "${ZEP_PROP_CACHE[$k_user]+x}" ]] && node_props+="zep:node:${n}:user,"
             [[ -z "${ZEP_PROP_CACHE[$k_fqdn]+x}" ]] && node_props+="zep:node:${n}:fqdn,"
             [[ -z "${ZEP_PROP_CACHE[$k_fs]+x}" ]] && node_props+="zep:node:${n}:fs,"
@@ -63,12 +67,12 @@ cache_zfs_props() {
         if [[ -n "$node_props" ]]; then
             node_props="${node_props%,}"  # strip trailing comma
             local vals
-            vals=$(zfs get -H -o value "$node_props" "$ds" 2>/dev/null)
+            vals=$(zfs get -H -o value "$node_props" "$root_ds" 2>/dev/null)
             local i=0
             IFS=',' read -ra props_arr <<< "$node_props"
             while IFS= read -r val; do
                 [[ -z "$val" ]] && val="-"
-                ZEP_PROP_CACHE["${ds}:${props_arr[$i]}"]="$val"
+                ZEP_PROP_CACHE["${root_ds}:${props_arr[$i]}"]="$val"
                 ((i++))
             done <<< "$vals"
         fi
@@ -286,25 +290,37 @@ resolve_node_filesystem() {
 }
 
 get_repl_props_encoded() {
-    local ds=$1
-    local RS=$'\x1e'
-    local props=""
+    local root_ds=$1
+    local US=$'\x1f'   # Unit Separator — delimits datasets
+    local RS=$'\x1e'   # Record Separator — delimits properties within a dataset
+    local blob=""
     # Use in-memory cache if populated, otherwise query ZFS directly
     if [[ ${#ZEP_PROP_CACHE[@]} -gt 0 ]]; then
-        for key in "${!ZEP_PROP_CACHE[@]}"; do
-            [[ "$key" == "${ds}:zep:"* ]] || continue
-            local prop="${key#${ds}:}"
-            props+="${prop}=${ZEP_PROP_CACHE[$key]}${RS}"
-        done
+        # Group cached entries by dataset
+        while read -r ds; do
+            [[ -z "$ds" ]] && continue
+            local ds_props=""
+            for key in "${!ZEP_PROP_CACHE[@]}"; do
+                [[ "$key" == "${ds}:zep:"* ]] || continue
+                local prop="${key#${ds}:}"
+                ds_props+="${prop}=${ZEP_PROP_CACHE[$key]}${RS}"
+            done
+            [[ -n "$ds_props" ]] && blob+="${US}${ds}${US}${ds_props}"
+        done < <(zfs list -H -o name -r "$root_ds" 2>/dev/null)
     else
-        # Use \x1e (record separator) as delimiter since values can contain ; or spaces
-        local raw
-        raw=$(zfs get all -H -o property,value "$ds" | grep "^zep:" | awk -F'\t' '{print $1"="$2}')
-        while IFS= read -r line; do
-            props+="${line}${RS}"
-        done <<< "$raw"
+        while read -r ds; do
+            [[ -z "$ds" ]] && continue
+            local raw
+            raw=$(zfs get all -H -o property,value "$ds" 2>/dev/null | grep "^zep:" | awk -F'\t' '{print $1"="$2}')
+            [[ -z "$raw" ]] && continue
+            local ds_props=""
+            while IFS= read -r line; do
+                ds_props+="${line}${RS}"
+            done <<< "$raw"
+            blob+="${US}${ds}${US}${ds_props}"
+        done < <(zfs list -H -o name -r "$root_ds" 2>/dev/null)
     fi
-    echo -n "$props" | base64 -w 0
+    echo -n "$blob" | base64 -w 0
 }
 
 apply_repl_props() {
@@ -320,7 +336,35 @@ apply_repl_props() {
         echo -e "${CHAIN_PREFIX}    ${C_RED}⚠️  Failed to decode properties${C_RESET}"
         return
     fi
-    IFS=$'\x1e' read -ra props <<< "$decoded"
+
+    local US=$'\x1f'
+    local RS=$'\x1e'
+    local props_str="$decoded"
+
+    # If multi-dataset format, extract only the section for target ds
+    if [[ "$decoded" == *"$US"* ]]; then
+        props_str=""
+        IFS="$US" read -ra sections <<< "$decoded"
+        local found=false
+        local fallback=""
+        local i=1
+        while [[ $i -lt ${#sections[@]} ]]; do
+            local sec_ds="${sections[$i]}"
+            local sec_props="${sections[$i+1]}"
+            [[ -z "$fallback" && -n "$sec_props" ]] && fallback="$sec_props"
+            if [[ "$sec_ds" == "$ds" ]]; then
+                props_str="$sec_props"
+                found=true
+                break
+            fi
+            i=$((i+2))
+        done
+        # If exact match fails (remote local_ds differs from source ds name),
+        # fall back to the first dataset section (root config properties)
+        [[ "$found" != true ]] && props_str="$fallback"
+    fi
+
+    IFS="$RS" read -ra props <<< "$props_str"
     for p in "${props[@]}"; do
         if [[ -n "$p" ]]; then
             local prop_key="${p%%=*}"
@@ -341,21 +385,57 @@ apply_repl_props() {
 }
 
 seed_cache_from_encoded() {
-    local ds=$1
+    local raw_ds=$1
     local encoded=$2
+    local local_ds="${3:-$raw_ds}"
     [[ -z "$encoded" ]] && return
     
     local decoded
     decoded=$(echo -n "$encoded" | base64 -d 2>/dev/null)
     [[ -z "$decoded" ]] && return
     
-    IFS=$'\x1e' read -ra props <<< "$decoded"
-    for p in "${props[@]}"; do
-        [[ -z "$p" ]] && continue
-        local k="${p%%=*}"
-        local v="${p#*=}"
-        ZEP_PROP_CACHE["${ds}:${k}"]="$v"
-    done
+    local US=$'\x1f'
+    local RS=$'\x1e'
+    
+    if [[ "$decoded" == *"$US"* ]]; then
+        # Multi-dataset format: US ds US prop=val RS prop=val RS US ds2 US ...
+        IFS="$US" read -ra sections <<< "$decoded"
+        local i=1  # skip leading empty from initial US
+        while [[ $i -lt ${#sections[@]} ]]; do
+            local ds_name="${sections[$i]}"
+            local props_str="${sections[$i+1]}"
+            [[ -z "$ds_name" || -z "$props_str" ]] && { i=$((i+2)); continue; }
+            # Seed under the raw dataset name
+            IFS="$RS" read -ra props <<< "$props_str"
+            for p in "${props[@]}"; do
+                [[ -z "$p" ]] && continue
+                local k="${p%%=*}"
+                local v="${p#*=}"
+                ZEP_PROP_CACHE["${ds_name}:${k}"]="$v"
+            done
+            # If local_ds differs from raw_ds, also seed under mapped local path
+            if [[ "$local_ds" != "$raw_ds" && "$ds_name" == "$raw_ds"* ]]; then
+                local local_child="${ds_name/#$raw_ds/$local_ds}"
+                for p in "${props[@]}"; do
+                    [[ -z "$p" ]] && continue
+                    local k="${p%%=*}"
+                    local v="${p#*=}"
+                    ZEP_PROP_CACHE["${local_child}:${k}"]="$v"
+                done
+            fi
+            i=$((i+2))
+        done
+    else
+        # Legacy single-dataset format: prop=val RS prop=val RS ...
+        IFS="$RS" read -ra props <<< "$decoded"
+        for p in "${props[@]}"; do
+            [[ -z "$p" ]] && continue
+            local k="${p%%=*}"
+            local v="${p#*=}"
+            ZEP_PROP_CACHE["${raw_ds}:${k}"]="$v"
+            [[ "$local_ds" != "$raw_ds" ]] && ZEP_PROP_CACHE["${local_ds}:${k}"]="$v"
+        done
+    fi
 }
 
 init_colors() {

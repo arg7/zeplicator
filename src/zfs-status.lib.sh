@@ -5,15 +5,18 @@ get_node_state() {
     local alias="$1"
     local raw_ds="$2"
     local node_role="$3"  # master, middle, or sink
+    local sync_props_data="$4"
     local fqdn=$(resolve_node_fqdn "$alias" "$raw_ds")
     local user=$(resolve_node_user "$alias" "$raw_ds")
     local ssh_t=$(resolve_ssh_timeout "$raw_ds")
     local output
+    local props_arg=""
+    [[ -n "$sync_props_data" ]] && props_arg="--sync-props $sync_props_data"
 
     if [[ "$alias" == "$(get_local_alias "$raw_ds" "")" ]]; then
-        output=$("$ZEPLICATOR_CMD" --alias "$alias" --stats "$raw_ds" 2>/dev/null)
+        output=$("$ZEPLICATOR_CMD" --alias "$alias" --stats "$raw_ds" $props_arg 2>/dev/null)
     else
-        output=$(timeout "$ssh_t" ssh -o ConnectTimeout="$ssh_t" -o BatchMode=yes "${user}@${fqdn}" "$ZEPLICATOR_CMD --alias $alias --stats $raw_ds" 2>/dev/null)
+        output=$(timeout "$ssh_t" ssh -o ConnectTimeout="$ssh_t" -o BatchMode=yes "${user}@${fqdn}" "$ZEPLICATOR_CMD --alias $alias --stats $raw_ds $props_arg" 2>/dev/null)
     fi
 
     if [[ -z "$output" ]]; then
@@ -35,6 +38,9 @@ cmd_status() {
     REPL_CHAIN=$(get_zfs_prop "zep:chain" "$raw_filesystem")
     [[ -z "$REPL_CHAIN" ]] && die "ERR: No replication chain found."
     IFS=',' read -r -a nodes <<< "$REPL_CHAIN"
+
+    # Encode properties to pass to remote nodes so they can skip cache population
+    local sync_props_data=$(get_repl_props_encoded "$raw_filesystem")
     
     local global_exit_code=0
     local idx=0
@@ -62,7 +68,7 @@ cmd_status() {
             fi
         fi
 
-        out=$(get_node_state "$n" "$node_ds" "$node_role")
+        out=$(get_node_state "$n" "$node_ds" "$node_role" "$sync_props_data")
         
         node_reachable=$?
         

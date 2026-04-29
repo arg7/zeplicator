@@ -259,13 +259,12 @@ if [[ "$DIV_MODE" == true ]]; then
 fi
 
 # Cache ZFS properties early — before any get_zfs_prop calls
-cache_zfs_props "$raw_filesystem"
-
-# If we received properties from upstream (e.g., initial sync), seed the cache 
-# so we can correctly resolve local_ds and chain info even if the dataset 
-# doesn't exist yet or is named differently.
+# If we received properties from upstream (e.g., via --sync-props in status/stats or cascaded replication),
+# seed the cache from the encoded blob and skip the expensive zfs get roundtrip.
 if [[ -n "$sync_props_data" ]]; then
     seed_cache_from_encoded "$raw_filesystem" "$sync_props_data"
+else
+    cache_zfs_props "$raw_filesystem"
 fi
 
 # Early local filesystem resolution
@@ -294,7 +293,7 @@ fi
 
 # If we have synced props, also seed the cache for the resolved local_ds
 if [[ -n "$sync_props_data" && "$local_ds" != "$raw_filesystem" ]]; then
-    seed_cache_from_encoded "$local_ds" "$sync_props_data"
+    seed_cache_from_encoded "$raw_filesystem" "$sync_props_data" "$local_ds"
 fi
 
 if [[ "$CASCADED" != true ]]; then
@@ -387,6 +386,19 @@ sync_chain_props() {
     local props_decoded=$(echo -n "$props_encoded" | base64 -d)
     local unreachable=()
 
+    # Extract root dataset properties from multi-dataset blob for heredoc compatibility
+    local root_props="$props_decoded"
+    if [[ "$props_decoded" == *$'\x1f'* ]]; then
+        root_props=""
+        IFS=$'\x1f' read -ra sections <<< "$props_decoded"
+        for ((idx=1; idx<${#sections[@]}; idx+=2)); do
+            if [[ "${sections[$idx]}" == "$ds_path" ]]; then
+                root_props="${sections[$idx+1]}"
+                break
+            fi
+        done
+    fi
+
     echo "  ⚙️  Syncing replication properties..."
     for n in "${target_nodes[@]}"; do
         [[ "$n" == "$my_hostname" ]] && continue
@@ -404,7 +416,7 @@ sync_chain_props() {
             export PROP_CACHE_FILE="/tmp/\${prefix}\${n}-prop-cache-\${ds_safe}-\\\$\\\$.txt"
             trap 'rm -f "\$PROP_CACHE_FILE"' EXIT
             zfs get all -H -o property,value "\$n_ds" 2>/dev/null | grep "^zep:" | grep -vE ":(shipped|alias|suspend)\$" > "\$PROP_CACHE_FILE" || true
-            IFS=$'\x1e' read -ra props <<< "$props_decoded"
+            IFS=$'\x1e' read -ra props <<< "$root_props"
             for p in "\${props[@]}"; do
                 [[ -z "\$p" ]] && continue
                 k="\${p%%=*}"
