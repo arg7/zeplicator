@@ -151,58 +151,52 @@ zfsbud_core() {
 
   # Helper inner functions
   filesystem_exists() {
-    if [ -n "$remote_shell" ]; then
-      $remote_shell "zfs list -H -o name" 2>/dev/null | grep -qx "$1" && return 0
-    else
-      zfs list -H -o name | grep -qx "$1" && return 0
-    fi
+    $remote_shell zfs list -H -o name 2>/dev/null | grep -qx "$1" && return 0
     return 1
   }
 
   set_resume_token() {
     ! filesystem_exists "$1" && return 0
     local token="-"
-    if [ -n "$remote_shell" ]; then
-      token=$($remote_shell "zfs get -H -o value receive_resume_token $1" 2>/dev/null)
-    else
-      token=$(zfs get -H -o value receive_resume_token "$1")
-    fi
+    token=$($remote_shell zfs get -H -o value receive_resume_token "$1" 2>/dev/null)
     [[ $token ]] && [[ $token != "-" ]] && resume_token=$token
   }
 
-  get_local_snapshots() { 
-    zfs list -H -o name,guid -t snapshot | grep "$1@"
+  set_source_snapshots() {
+    # format: filesystem@name<tab>guid
+    mapfile -t source_snapshots < <(zfs list -H -o name,guid -t snapshot | grep "$1@")
     if [[ "$DRY_RUN" == true ]]; then
-        # Inject virtual snapshots from upstream
         if [[ -n "$VIRTUAL_SNAPS_INCOMING" ]]; then
             IFS=',' read -ra v_snaps <<< "$VIRTUAL_SNAPS_INCOMING"
             for v in "${v_snaps[@]}"; do
                 [[ -z "$v" ]] && continue
-                echo -e "${1}@${v}\tVIRTUAL"
+                source_snapshots+=("${1}@${v}\tVIRTUAL")
             done
         fi
-        # Inject locally created virtual snapshot
         if [[ -n "$VIRTUAL_SNAP_CREATED" ]]; then
-            echo -e "${1}@${VIRTUAL_SNAP_CREATED}\tVIRTUAL"
+            source_snapshots+=("${1}@${VIRTUAL_SNAP_CREATED}\tVIRTUAL")
         fi
     fi
   }
   
-  set_source_snapshots() {
-    # format: filesystem@name<tab>guid
-    mapfile -t source_snapshots < <(get_local_snapshots "$1")
-  }
-  
   set_destination_snapshots() {
     local target_ds="$1"
-    if [ -n "$remote_shell" ]; then
-      local output
-      output=$($remote_shell "zfs list -H -o name,guid -t snapshot -r $target_ds 2>/dev/null" | awk '{print $1" "$2}')
-      local status=$?
-      [[ $status -ne 0 && $status -ne 1 ]] && return $status # Connectivity error
-      mapfile -t destination_snapshots <<< "$output"
-    else
-      mapfile -t destination_snapshots < <(get_local_snapshots "$target_ds")
+    local output
+    output=$($remote_shell zfs list -H -o name,guid -t snapshot -r "$target_ds" 2>/dev/null)
+    local status=$?
+    [[ $status -ne 0 && $status -ne 1 ]] && return $status
+    mapfile -t destination_snapshots <<< "$output"
+    if [[ "$DRY_RUN" == true ]]; then
+        if [[ -n "$VIRTUAL_SNAPS_INCOMING" ]]; then
+            IFS=',' read -ra v_snaps <<< "$VIRTUAL_SNAPS_INCOMING"
+            for v in "${v_snaps[@]}"; do
+                [[ -z "$v" ]] && continue
+                destination_snapshots+=("${target_ds}@${v}\tVIRTUAL")
+            done
+        fi
+        if [[ -n "$VIRTUAL_SNAP_CREATED" ]]; then
+            destination_snapshots+=("${target_ds}@${VIRTUAL_SNAP_CREATED}\tVIRTUAL")
+        fi
     fi
     return 0
   }
@@ -295,29 +289,26 @@ zfsbud_core() {
 
     if [[ "$is_initial" == "true" && "$DESTROY_CHAIN" == true ]]; then
         zbud_msg "  💥 DESTROY_CHAIN: Cleaning up $remote_ds for initial send..."
-        if [[ -n "$remote_shell" ]]; then
-            $remote_shell -o ConnectTimeout="$ssh_t" "zfs destroy -r $remote_ds 2>/dev/null || true"
-        else
-            zfs destroy -r "$remote_ds" 2>/dev/null || true
-        fi
+        $remote_shell zfs destroy -r "$remote_ds" 2>/dev/null || true
     fi
 
     > "${lock_path}.cnt"
     > "$err_log"
 
-    if [[ -n "$remote_shell" && -n "$LOCKFILE" && -f "$LOCKFILE" ]]; then
-        echo "$(cat "$LOCKFILE" | awk '{print $1}') $hop_node $remote_ds" > "$LOCKFILE"
+    if [[ -n "$LOCKFILE" && -f "$LOCKFILE" ]]; then
+        local node_info="${hop_node:-$alias_val}"
+        echo "$(awk '{print $1}' "$LOCKFILE") $node_info $remote_ds" > "$LOCKFILE"
     fi
 
     # --- Unified message ---
     zbud_msg "  🚀 Sending $transfer_label replication to $remote_ds..."
 
-    # --- Build unified pipeline ---
-    local pipeline
+    # --- Build pipeline ---
+    local pipeline="zfs send $send_opt 2>>\"$err_log\" | iomon \"$lock_path\" 1 $iomon_timeout | mbuffer -q $mbuffer_throttle -m \"$mbuffer_size\" 2>>\"$err_log\""
     if [[ -n "$remote_shell" ]]; then
-        pipeline="zfs send $send_opt 2>>\"$err_log\" | iomon \"$lock_path\" 1 $iomon_timeout | mbuffer -q $mbuffer_throttle -m \"$mbuffer_size\" 2>>\"$err_log\" | zstd 2>>\"$err_log\" | $remote_shell -o ConnectTimeout=\"$ssh_t\" \"zstd -d | zfs recv $recv_opt $remote_ds\" 2>>\"$err_log\""
+        pipeline+=" | zstd 2>>\"$err_log\" | $remote_shell -o ConnectTimeout=\"$ssh_t\" \"zstd -d | zfs recv $recv_opt $remote_ds\" 2>>\"$err_log\""
     else
-        pipeline="zfs send $send_opt 2>>\"$err_log\" | iomon \"$lock_path\" 1 $iomon_timeout | zfs recv $recv_opt \"$remote_ds\" 2>>\"$err_log\""
+        pipeline+=" | zfs recv $recv_opt \"$remote_ds\" 2>>\"$err_log\""
     fi
 
     # --- Execute ---
@@ -336,11 +327,7 @@ zfsbud_core() {
             hint_msg+="    zfs rollback -r ${remote_ds}@${last_snapshot_common:-?}"
 
             local diff_output=""
-            if [[ -n "$remote_shell" ]]; then
-                diff_output=$($remote_shell "zep $remote_ds --divergence-report ${last_snapshot_common:-}" 2>&1)
-            else
-                diff_output=$(divergence_report "$remote_ds" "${last_snapshot_common:-}" 2>&1)
-            fi
+            diff_output=$($remote_shell zep "$remote_ds" --divergence-report "${last_snapshot_common:-}" 2>&1)
             [[ -n "$diff_output" ]] && echo "$diff_output" | while IFS= read -r line; do zbud_msg "  |  $line"; done
 
             zbud_msg ""
@@ -350,13 +337,8 @@ zfsbud_core() {
             zbud_msg ""
             echo "$hint_msg" > "${REPL_HINT_FILE:?REPL_HINT_FILE not set}"
 
-            if [[ -n "$remote_shell" ]]; then
-                $remote_shell "zfs set zep:error:split-brain=true $remote_ds" 2>/dev/null && \
-                    zbud_msg "  ${C_CYAN}ℹ️${C_RESET}  Marked $remote_ds on destination with split-brain error flag."
-            else
-                zfs set zep:error:split-brain=true "$remote_ds" 2>/dev/null && \
-                    zbud_msg "  ${C_CYAN}ℹ️${C_RESET}  Marked $remote_ds with split-brain error flag."
-            fi
+            $remote_shell zfs set zep:error:split-brain=true "$remote_ds" 2>/dev/null && \
+                zbud_msg "  ${C_CYAN}ℹ️${C_RESET}  Marked $remote_ds with split-brain error flag."
 
             local clean_hint=$(echo -e "${hint_msg//|/\\n}" | sed 's/\x1b\[[0-9;]*m//g')
             local clean_diff=$(echo -e "$diff_output" | sed 's/\x1b\[[0-9;]*m//g')

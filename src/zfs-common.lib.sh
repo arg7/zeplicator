@@ -467,7 +467,7 @@ check_stuck_job() {
 
     local waited=0
     while [[ -f "$LOCKFILE" ]]; do
-        local lock_pid=$(cat "$LOCKFILE" 2>/dev/null)
+        local lock_pid=$(awk '{print $1}' "$LOCKFILE" 2>/dev/null)
         
         # Self-healing: Check if the PID is actually running
         if [[ -n "$lock_pid" ]]; then
