@@ -43,9 +43,9 @@ tmux split-window -v -l 30% -t "$SESSION_NAME:0.0" 2>/dev/null || tmux split-win
 # Pane 2: Right upper (watch status)
 # Pane 3: Right lower (bash for traffic/network simulation)
 
-# Set up left main pane (Pane 0)
+# Set up left main pane (Pane 0) - Test Suite
 tmux send-keys -t "$SESSION_NAME:0.0" "clear" C-m
-tmux send-keys -t "$SESSION_NAME:0.0" "$SCRIPT_DIR/zep_test_loop.sh" C-m
+tmux send-keys -t "$SESSION_NAME:0.0" "$SCRIPT_DIR/zep_replication_tests.sh $*" C-m
 
 # Set up left lower pane (Pane 1) - SMTP Server
 tmux send-keys -t "$SESSION_NAME:0.1" "clear" C-m
@@ -57,10 +57,9 @@ DATASET_TO_WATCH="zep-node-1/test-1"
 ZEP_BIN="$SCRIPT_DIR/../build/zep"
 tmux send-keys -t "$SESSION_NAME:0.2" "watch --color -n 10 $ZEP_BIN $DATASET_TO_WATCH --status --force-color --alias node1" C-m
 
-# Set up right lower pane (Pane 3) - Traffic / Network simulator
+# Set up right lower pane (Pane 3) - Simulator shell
 tmux send-keys -t "$SESSION_NAME:0.3" "clear" C-m
-tmux send-keys -t "$SESSION_NAME:0.3" "echo '=== Simulator Shell ==='" C-m
-tmux send-keys -t "$SESSION_NAME:0.3" "echo 'Use this pane to edit /etc/hosts or generate disk traffic.'" C-m
+tmux send-keys -t "$SESSION_NAME:0.3" "cd $SCRIPT_DIR && source sim.sh && cat README.txt" C-m
 
 # Select the main left pane as the active one
 tmux select-pane -t "$SESSION_NAME:0.0"

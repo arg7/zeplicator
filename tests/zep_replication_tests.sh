@@ -17,13 +17,43 @@ YELLOW='\e[33m'
 CYAN='\e[36m'
 RESET='\e[0m'
 
+# ── test filtering ───────────────────────────────────────
+
+RUN_TESTS=()
+SKIP_TESTS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --test)
+            while [[ $# -gt 1 && ! "$2" =~ ^-- ]]; do
+                RUN_TESTS+=("$2"); shift
+            done
+            shift ;;
+        --skip)
+            while [[ $# -gt 1 && ! "$2" =~ ^-- ]]; do
+                SKIP_TESTS+=("$2"); shift
+            done
+            shift ;;
+        *) shift ;;
+    esac
+done
+
+should_run() {
+    local t="$1"
+    if [[ ${#RUN_TESTS[@]} -gt 0 ]]; then
+        for rt in "${RUN_TESTS[@]}"; do [[ "$rt" == "$t" ]] && return 0; done
+        return 1
+    fi
+    for st in "${SKIP_TESTS[@]}"; do [[ "$st" == "$t" ]] && return 1; done
+    return 0
+}
+
 # ── helpers ──────────────────────────────────────────────
 
 clean_tmp() { rm -rf /tmp/zep_* 2>/dev/null || true; }
 
 assert_exit() {
     local name="$1" expected="$2" actual="$3"
-    if [[ "$expected" == "0" && "$actual" -eq 0 ]] || [[ "$expected" == "!0" && "$actual" -ne 0 ]]; then
+    if [[ "$expected" == "0" && "$actual" -eq 0 ]] || [[ "$expected" == "!0" && "$actual" -ne 0 ]] || [[ "$expected" =~ ^[0-9]+$ && "$actual" -eq "$expected" ]]; then
         echo -e "  ${GREEN}PASS${RESET} $name"
         ((PASS++))
     else
@@ -74,6 +104,7 @@ bash "$SCRIPT_DIR/init.sh" > /dev/null 2>&1 || { echo "  init.sh failed"; exit 1
 clean_tmp
 echo -e "  ${GREEN}OK${RESET}"
 
+if should_run 1; then
 # ══════════════════════════════════════════════════════════
 # TEST 1: INIT_CLEAN — initial replication, clean dest
 # ══════════════════════════════════════════════════════════
@@ -87,7 +118,9 @@ for i in 1 2 3; do
     cnt=$(zfs list -t snap -H -o name -r zep-node-$i/test-$i 2>/dev/null | grep -c "$LABEL" || echo 0)
     assert_out "node$i snaps" "$cnt" "1"
 done
+fi
 
+if should_run 2; then
 # ══════════════════════════════════════════════════════════
 # TEST 2: INCREMENTAL — normal incremental run
 # ══════════════════════════════════════════════════════════
@@ -95,7 +128,9 @@ echo -e "\n${CYAN}[2] INCREMENTAL${RESET}"
 out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
 assert_exit "exit 0"   "0" "$rc"
 assert_out  "cascade"  "$out" "VERIFICATION SUCCESS"
+fi
 
+if should_run 3; then
 # ══════════════════════════════════════════════════════════
 # TEST 3: FOREIGN_DATASET — node3 has snaps, no common ground
 # ══════════════════════════════════════════════════════════
@@ -109,7 +144,9 @@ zfs allow zep-user-3 create,mount,receive,destroy,userprop,diff zep-node-3 2>/de
 out=$(run_zep "$DS" --alias node1 "$LABEL" --init); rc=$?
 assert_exit "exit !0"  "!0" "$rc"
 assert_out  "FOREIGN"  "$out" "FOREIGN DATASET"
+fi
 
+if should_run 4; then
 # ══════════════════════════════════════════════════════════
 # TEST 4: MISSING_PERMS — revoke pool perms on node3
 # ══════════════════════════════════════════════════════════
@@ -124,7 +161,9 @@ assert_out  "perms msg" "$out" "Missing pool permissions"
 # restore
 zfs allow zep-user-3 create,mount,receive,destroy,userprop,diff zep-node-3 2>/dev/null
 zfs allow zep-user-3 create,destroy,send,receive,snapshot,hold,release,userprop,diff zep-node-3/test-3 2>/dev/null || true
+fi
 
+if should_run 5; then
 # ══════════════════════════════════════════════════════════
 # TEST 5: DIVERGENCE — node3 has data written since snapshot
 # ══════════════════════════════════════════════════════════
@@ -140,7 +179,9 @@ zfs unmount zep-node-3/test-3 2>/dev/null; zfs set canmount=noauto zep-node-3/te
 out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
 assert_exit "exit !0"  "!0" "$rc"
 assert_out  "DIVERGENCE" "$out" "DIVERGENCE DETECTED"
+fi
 
+if should_run 6; then
 # ══════════════════════════════════════════════════════════
 # TEST 6: DIVERGENCE_OVERRIDE — -y forces through
 # ══════════════════════════════════════════════════════════
@@ -148,7 +189,9 @@ echo -e "\n${CYAN}[6] DIVERGENCE_OVERRIDE${RESET}"
 out=$(run_zep "$DS" --alias node1 "$LABEL" -y); rc=$?
 assert_exit "exit 0"   "0" "$rc"
 assert_out  "forcing"  "$out" "Forcing alignment"
+fi
 
+if should_run 7; then
 # ══════════════════════════════════════════════════════════
 # TEST 7: NON_MASTER_SKIP — node2 skips snapshot creation
 # ══════════════════════════════════════════════════════════
@@ -156,7 +199,9 @@ echo -e "\n${CYAN}[7] NON_MASTER_SKIP${RESET}"
 out=$(run_zep "zep-node-2/test-2" --alias node2 "$LABEL"); rc=$?
 assert_exit "exit !0"  "!0" "$rc"
 assert_out  "not master" "$out" "not Master"
+fi
 
+if should_run 8; then
 # ══════════════════════════════════════════════════════════
 # TEST 8: MISSING_POOL — target pool exported
 # ══════════════════════════════════════════════════════════
@@ -168,7 +213,9 @@ out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
 zpool import -f zep-node-3 2>/dev/null || true
 assert_exit "exit !0"  "!0" "$rc"
 assert_out  "pool msg" "$out" "not found"
+fi
 
+if should_run 9; then
 # ══════════════════════════════════════════════════════════
 # TEST 9: STATUS — status command works
 # ══════════════════════════════════════════════════════════
@@ -179,7 +226,9 @@ assert_exit "exit 0"   "0" "$rc"
 assert_out  "node1"    "$out" "node1"
 assert_out  "node2"    "$out" "node2"
 assert_out  "node3"    "$out" "node3"
+fi
 
+if should_run 10; then
 # ══════════════════════════════════════════════════════════
 # TEST 10: ROTATE — retention keeps count within limit
 # ══════════════════════════════════════════════════════════
@@ -191,6 +240,7 @@ if [[ $cnt -le 10 ]]; then
     echo -e "  ${GREEN}PASS${RESET} rotate count $cnt <= 10"; ((PASS++))
 else
     echo -e "  ${RED}FAIL${RESET} rotate count $cnt > 10"; ((FAIL++))
+fi
 fi
 
 # ══════════════════════════════════════════════════════════
@@ -211,6 +261,7 @@ teardown_resume_mode() {
     zep "$DS" --alias node1 --config zep:debug:send_timeout=0 --all > /dev/null 2>&1
 }
 
+if should_run 11; then
 # ══════════════════════════════════════════════════════════
 # TEST 11: RESUME — interrupted transfer resumes and completes
 # ══════════════════════════════════════════════════════════
@@ -248,7 +299,9 @@ else
 fi
 
 teardown_resume_mode
+fi
 
+if should_run 12; then
 # ══════════════════════════════════════════════════════════
 # TEST 12: RESUME_FAILED — snapshots destroyed mid-transfer
 # ══════════════════════════════════════════════════════════
@@ -310,6 +363,67 @@ if [[ -n "$rem" && "$rem" -ge 2 ]]; then
     echo -e "  ${GREEN}PASS${RESET} remaining snaps on sink: $rem >= 2"; ((PASS++))
 else
     echo -e "  ${RED}FAIL${RESET} remaining snaps on sink: '$rem' < 2"; ((FAIL++))
+fi
+fi
+
+# ══════════════════════════════════════════════════════════
+# RESILIENCE TESTS — policy=resilience tolerates offline nodes
+# ══════════════════════════════════════════════════════════
+
+echo -e "\n${CYAN}=== Resilience Tests ===${RESET}"
+
+isolate_node() {
+    local node="$1"
+    sed -i "/zep-node-${node}.local/d" /etc/hosts
+}
+
+restore_node() {
+    local node="$1"
+    if ! grep -q "zep-node-${node}.local" /etc/hosts 2>/dev/null; then
+        echo "127.0.0.1 zep-node-${node}.local" >> /etc/hosts
+    fi
+}
+
+if should_run 13; then
+# ══════════════════════════════════════════════════════════
+# TEST 13: RESILIENCE_NODE2_OFFLINE — node2 unreachable, exits 3
+# ══════════════════════════════════════════════════════════
+echo -e "\n${CYAN}[13] RESILIENCE_NODE2_OFFLINE — node2 offline, exits 3${RESET}"
+destroy_node3
+run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
+
+# Set policy=resilience on master
+"$ZEP_BIN" "$DS" --alias node1 --config policy=resilience > /dev/null
+
+# Isolate node2 (last in chain: node1→node3→node2, partial success expected)
+isolate_node 2
+
+for cycle in 1 2 3; do
+    out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+    assert_exit "cycle $cycle exit 3" "3" "$rc"
+    assert_out  "skip node2" "$out" "WARNING: Downstream cascade from node3 failed"
+done
+
+# Verify node3 still receives snapshots even though node2 is down
+snap_cnt=$(zfs list -t snap -H -o name -r zep-node-3/test-3 2>/dev/null | grep -c "$LABEL" || echo 0)
+assert_out "node3 got snaps while node2 offline" "$snap_cnt" "4" # 1 from --init + 3 cycles
+fi
+
+if should_run 14; then
+# ══════════════════════════════════════════════════════════
+# TEST 14: RESILIENCE_NODE2_RECOVERY — restore node2, full success
+# ══════════════════════════════════════════════════════════
+echo -e "\n${CYAN}[14] RESILIENCE_NODE2_RECOVERY — restore node2, exits 0${RESET}"
+
+restore_node 2
+sleep 1 # let SSH cache clear
+
+out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+assert_exit "restored exit 0" "0" "$rc"
+assert_out  "cascade ok" "$out" "VERIFICATION SUCCESS"
+
+# Reset policy to fail for subsequent test runs
+"$ZEP_BIN" "$DS" --alias node1 --config policy=fail > /dev/null
 fi
 
 echo ""
