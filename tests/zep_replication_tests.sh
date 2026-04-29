@@ -146,6 +146,9 @@ assert_exit "exit !0"  "!0" "$rc"
 assert_out  "FOREIGN"  "$out" "FOREIGN DATASET"
 # cleanup: reset node3 for subsequent tests
 destroy_node3
+zfs create -o canmount=noauto zep-node-3/test-3
+zfs unmount zep-node-3/test-3 2>/dev/null || true
+zfs allow zep-user-3 create,destroy,send,receive,snapshot,hold,release,userprop zep-node-3/test-3 2>/dev/null || true
 fi
 
 if should_run 4; then
@@ -212,7 +215,7 @@ destroy_node3; run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
 zfs unmount zep-node-3/test-3 2>/dev/null || true
 zpool export zep-node-3
 out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
-zpool import -f zep-node-3 2>/dev/null || true
+zpool import -f -d /tmp/zep-ramdisk zep-node-3 2>/dev/null || true
 assert_exit "exit !0"  "!0" "$rc"
 assert_out  "pool msg" "$out" "not found"
 fi

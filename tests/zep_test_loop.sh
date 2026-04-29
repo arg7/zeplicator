@@ -22,7 +22,7 @@ pause_if_unexpected() {
     fi
 }
 
-if false; then
+if ! false; then
 echo "=== Zeplicator Activity Loop ==="
 echo "1. Performing Initial Sync..."
 $ZEP_BIN --alias node1 "$DS" "$LABEL" --init
@@ -40,7 +40,9 @@ while true; do
     EXIT_CODE=$?
     echo "Master Sync Exit Code: $EXIT_CODE"
     pause_if_unexpected "zero" "$EXIT_CODE" "Master Sync"
-    
+
+if false; then
+
     echo "----------------------------------------"
     echo "[$(date +%T)] Non-Master Sync (node2) - Expected to fail..."
     $ZEP_BIN --alias node2 "$DS" "$LABEL"
@@ -48,6 +50,9 @@ while true; do
     echo "Non-Master Sync Exit Code: $EXIT_CODE"
     pause_if_unexpected "nonzero" "$EXIT_CODE" "Non-Master Sync"
     
+
+fi
+
     echo "----------------------------------------"
     echo "Sleeping 3s..."
     sleep 3

@@ -167,19 +167,24 @@ for i in $(seq 1 "$NUM_NODES"); do
     if [[ ! -f "$ZEP_SSH_DIR/id_rsa" ]]; then
         ssh-keygen -t rsa -b 2048 -f "$ZEP_SSH_DIR/id_rsa" -N "" -q
     fi
-    # Start authorized_keys with root's pubkey so master can connect
-    # Detect root's actual key type (ed25519, rsa, ecdsa)
-    root_pubkey=""
+    # Start authorized_keys with current user's pubkey so master can connect
+    # Detect the current user's actual key type (ed25519, rsa, ecdsa)
+    user_pubkey=""
     for kt in id_ed25519 id_rsa id_ecdsa; do
-        if [[ -f "/root/.ssh/${kt}.pub" ]]; then
-            root_pubkey="/root/.ssh/${kt}.pub"
+        if [[ -f "${HOME}/.ssh/${kt}.pub" ]]; then
+            user_pubkey="${HOME}/.ssh/${kt}.pub"
             break
         fi
     done
-    if [[ -n "$root_pubkey" ]]; then
-        cat "$root_pubkey" > "$ZEP_SSH_DIR/authorized_keys"
+    if [[ -n "$user_pubkey" ]]; then
+        cat "$user_pubkey" > "$ZEP_SSH_DIR/authorized_keys"
     else
-        touch "$ZEP_SSH_DIR/authorized_keys"
+        # Generate a key for the current user if none exists
+        if [[ ! -f "${HOME}/.ssh/id_rsa" ]]; then
+            mkdir -p "${HOME}/.ssh"
+            ssh-keygen -t rsa -b 2048 -f "${HOME}/.ssh/id_rsa" -N "" -q
+        fi
+        cat "${HOME}/.ssh/id_rsa.pub" > "$ZEP_SSH_DIR/authorized_keys"
     fi
     chown -R "$ZEP_USER:$ZEP_USER" "$ZEP_SSH_DIR"
     chmod 700 "$ZEP_SSH_DIR"

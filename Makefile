@@ -1,6 +1,7 @@
 BUILD_DIR := build
 OUTPUT := $(BUILD_DIR)/zep
 IOMON := $(BUILD_DIR)/iomon
+ALERTCON := $(BUILD_DIR)/alertcon
 LIBS := src/zfs-common.lib.sh src/zfs-stats.lib.sh src/zfs-status.lib.sh src/zfs-alerts.lib.sh src/zfs-retention.lib.sh src/zfs-transfer.lib.sh
 MAIN := src/zeplicator
 
@@ -9,14 +10,15 @@ BINDIR := $(PREFIX)/bin
 
 .PHONY: all clean install
 
-all: $(IOMON) $(OUTPUT)
+all: $(IOMON) $(OUTPUT) $(ALERTCON)
 
 install: all
 	@echo "Installing to $(DESTDIR)$(BINDIR)..."
 	mkdir -p $(DESTDIR)$(BINDIR)
 	cp $(OUTPUT) $(DESTDIR)$(BINDIR)/zep
 	cp $(IOMON) $(DESTDIR)$(BINDIR)/iomon
-	chmod +x $(DESTDIR)$(BINDIR)/zep $(DESTDIR)$(BINDIR)/iomon
+	cp $(ALERTCON) $(DESTDIR)$(BINDIR)/alertcon
+	chmod +x $(DESTDIR)$(BINDIR)/zep $(DESTDIR)$(BINDIR)/iomon $(DESTDIR)$(BINDIR)/alertcon
 	@echo "Installation complete."
 
 $(BUILD_DIR):
@@ -25,6 +27,11 @@ $(BUILD_DIR):
 $(IOMON): src/iomon.c | $(BUILD_DIR)
 	@echo "Compiling iomon.c..."
 	gcc -O3 $< -o $@
+
+$(ALERTCON): src/alertcon | $(BUILD_DIR)
+	@echo "Copying alertcon..."
+	cp $< $@
+	chmod +x $@
 
 $(OUTPUT): $(LIBS) $(MAIN) | $(BUILD_DIR)
 	@echo "Building $@"

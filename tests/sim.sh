@@ -3,7 +3,7 @@
 # Sourced automatically in tzepcon pane 3
 
 SDIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-export PS1='\[\e[36m\]sim>\[\e[0m\] '
+export PS1=$'\e[36msim>\e[0m '
 SESSION="${ZEP_SESSION:-zep-test}"
 DS="zep-node-1/test-1"
 

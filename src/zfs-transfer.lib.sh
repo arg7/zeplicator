@@ -34,7 +34,7 @@ find_best_donor() {
         log_message "  Verifying filesystem $ds_on_donor on $donor_alias..."
         if timeout "$((ssh_t + 5))" ssh -o ConnectTimeout="$ssh_t" "$donor_target" "zfs list -t snapshot -H -r $ds_on_donor >/dev/null 2>&1"; then
             log_message "  Performing capability dry-run on $donor_alias..."
-            if timeout "$((proc_t + 5))" ssh -o ConnectTimeout="$ssh_t" "$donor_target" "$ZEPLICATOR_CMD $ds_raw $label 0 --alias $donor_alias --target $target_node --donor --dry-run >/dev/null 2>&1"; then
+            if timeout "$((proc_t + 5))" ssh -o ConnectTimeout="$ssh_t" "$donor_target" "zep $ds_raw $label 0 --alias $donor_alias --target $target_node --donor --dry-run >/dev/null 2>&1"; then
                 log_message "  ✅ $donor_alias selected as best donor."
                 echo "$donor_alias"
                 return 0

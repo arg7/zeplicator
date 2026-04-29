@@ -52,5 +52,139 @@ make
 # Usage on nodes: /scripts/build/zep <dataset> <label>
 ```
 
+## Test Infrastructure
+
+### Overview
+
+Tests simulate a multi-node ZFS replication cluster entirely on a single machine using:
+- **tmpfs ramdisk** (`/tmp/zep-ramdisk`) — holds per-node sparse pool images
+- **`/etc/hosts`** — mock DNS resolving `zep-node-$i.local` → `127.0.0.1`
+- **System user accounts** (`zep-user-1` .. `zep-user-N`) — simulate per-node replication users with delegated ZFS permissions
+- **Full-mesh SSH** — each zep-user's pubkey is distributed to every other zep-user and to root so `zep` can SSH between "nodes" without passwords
+
+Test scripts live in `tests/` and are run directly — they are **not** part of the `make` build.
+
+### File Reference
+
+| File | Purpose |
+|---|---|
+| `tests/test.conf` | Central config — pool size, chain order, SMTP settings, alert thresholds |
+| `tests/init.sh` | One-shot setup: ramdisk, ZFS pools/datasets, zep-user accounts, SSH mesh, master config import, cron rotation |
+| `tests/zep_replication_tests.sh` | Main 16-test suite (see table below) |
+| `tests/tzepcon` | Launches an interactive 4-pane tmux session for live test observation |
+| `tests/sim.sh` | Convenience wrappers sourced in the tmux simulator pane: `start`, `stop`, `config`, `keystroke`, `q` |
+| `tests/done.sh` | Full teardown: destroy pools, unmount ramdisk, remove users, clean `/etc/hosts` and crontab |
+| `tests/zep_test_loop.sh` | Manual infinite sync loop (syncs every 3s), pauses on unexpected exits for inspection |
+| `tests/test_splitbrain.sh` | Standalone 8-phase split-brain detection / resilience / rollback / force-override validation |
+| `tests/test_promote.sh` | Standalone chain promotion test: promotes through all nodes, verifies chain propagation and replication exit codes |
+| `tests/README.txt` | User-facing cheatsheet displayed in the simulator pane |
+
+### Simulated Cluster Architecture
+
+All "nodes" are local ZFS pools named `zep-node-1` .. `zep-node-N`, each with one dataset `zep-node-$i/test-$i`:
+
+| Node | Pool | Dataset | User | Role |
+|---|---|---|---|---|
+| node1 | `zep-node-1` | `test-1` | `zep-user-1` | Master (source of truth) |
+| node2 | `zep-node-2` | `test-2` | `zep-user-2` | Middle/replica |
+| node3 | `zep-node-3` | `test-3` | `zep-user-3` | Sink (last in chain) |
+
+**Critical: the chain is deliberately non-sequential.** The default `CHAIN` in `test.conf` is `node1,node3,node2` — this exercises the out-of-order chain ordering logic, not a simple 1→2→3 pipeline.
+
+### Pool and Dataset Permissions
+
+`init.sh` delegates minimal ZFS permissions per zep-user:
+
+- **Pool-level** (`zfs allow` on the pool): `create,mount,receive,destroy,userprop,diff`
+  - `create` + `mount` are required for `zfs recv` to create/receive datasets
+  - These survive dataset destruction (tied to the pool, not the dataset)
+- **Dataset-level** (`zfs allow` on the specific dataset): `create,destroy,send,receive,snapshot,hold,release,userprop`
+  - These are LOST if the dataset is destroyed — must be re-delegated after recreate
+
+### SSH Mesh Setup (init.sh)
+
+1. Each zep-user gets a generated RSA keypair in their home `.ssh/`
+2. The **current user's** SSH pubkey (\(`HOME/.ssh/id_*.pub`) is copied to each zep-user's `authorized_keys` — this is how `zep` running as root (or the test runner) can SSH to remote nodes as zep-user-$i
+3. Full mesh: every zep-user's pubkey is appended to every other zep-user's `authorized_keys` — needed for peer-to-peer donor discovery and master rotation
+4. All zep-users also get their pubkey added to root's `authorized_keys`
+5. `known_hosts` is propagated from root to all zep-users
+6. All `authorized_keys` are deduplicated with `sort -u`
+
+**Gotcha**: If the test runner's SSH key isn't in the zep-user accounts, `zep --status` and `--init` pre-flight checks will fail with connection timeouts. The fix in `init.sh` uses `${HOME}/.ssh/` (not a hardcoded `/root/.ssh/`) and auto-generates a key if none exists.
+
+### The 16 Tests (zep_replication_tests.sh)
+
+Tests 1-10 are deterministic unit tests. Tests 11-12 exercise resume/recovery. Tests 13-16 test resilience and promotion.
+
+| # | Name | What it does | Expect |
+|---|---|---|---|
+| 1 | `INIT_CLEAN` | Destroys node3, runs `--init`, verifies 1 snapshot on all 3 nodes | exit 0 |
+| 2 | `INCREMENTAL` | Runs normal incremental replication | exit 0 |
+| 3 | `FOREIGN_DATASET` | Creates alien snapshot on node3, runs `--init`, expects rejection. **After test, destroys and re-creates test-3 with proper perms** | exit !0 |
+| 4 | `MISSING_PERMS` | Re-inits chain, revokes pool perms on node3, expects "Missing pool permissions" | exit !0 |
+| 5 | `DIVERGENCE` | Writes 256K to node3, expects "DIVERGENCE DETECTED" | exit !0 |
+| 6 | `DIVERGENCE_OVERRIDE` | Runs with `-y`, expects "Forcing alignment" and success | exit 0 |
+| 7 | `NON_MASTER_SKIP` | Runs as node2 (non-master), expects "not Master" | exit !0 |
+| 8 | `MISSING_POOL` | Exports node3's pool, expects "not found" | exit !0 |
+| 9 | `STATUS` | Runs `--status --force-color`, verifies all 3 node names appear | exit 0 |
+| 10 | `ROTATE` | 3 snapshots, runs `--rotate`, verifies count ≤ 10 | count |
+| 11 | `RESUME` | Throttled to 32k/s, 5s timeout, sends 2MB, retries up to 30x | exit 0 |
+| 12 | `RESUME_FAILED` | 5 snapshots, interruption, destroys mid-transmit snaps, verifies token cleared, remaining snaps ≥ 2 | exit 0 |
+| 13 | `RESILIENCE_NODE2_OFFLINE` | Sets `policy=resilience`, removes node2 from `/etc/hosts`, 3 cycles expect exit 3, node3 gets 4 snaps | exit 3 |
+| 14 | `RESILIENCE_NODE2_RECOVERY` | Restores node2, full replication succeeds, resets policy to `fail` | exit 0 |
+| 15 | `PROMOTE_NODE3` | `--promote` node3 to master, chain becomes `node3,node1,node2` | exit 0 |
+| 16 | `PROMOTE_NODE1_BACK` | Promotes node1 back, chain restored to `node1,node3,node2` | exit 0 |
+
+### Test Flow Patterns
+
+**Test isolation convention**: Most tests start with `destroy_node3` (destroys `zep-node-3/test-3`) followed by `--init` to re-establish a clean state. This means:
+- Tests **mutate shared ZFS state** — they are NOT fully isolated
+- Tests must be run **sequentially in order** (1→2→...→16)
+- If a test leaves node3 in a broken state, subsequent tests will fail
+
+**Helper functions** in `zep_replication_tests.sh`:
+- `run_zep()` — clears `/tmp/zep_*`, runs `zep`, returns stdout and exit code
+- `assert_exit(name, expected, actual)` — 0, !0, or exact value
+- `assert_out(name, output, pattern)` — grep for pattern in output
+- `destroy_node3()` — `zfs destroy -r zep-node-3/test-3`
+- `clean_tmp()` — `rm -rf /tmp/zep_*`
+
+**Test filtering**: `--test 1 2 3` runs only those; `--skip 4 5` runs all except those.
+
+### Key Distinctions
+
+- **`zep_replication_tests.sh`** uses `command -v zep` (installed binary) with `--alias`; tests are sequential and mutate shared state
+- **`test_splitbrain.sh`** and **`test_promote.sh`** use `$SCRIPT_DIR/../build/zep` (compiled bundle) and SSH directly to nodes for property reads; they reset state within themselves via `set -uo pipefail`
+- **`tzepcon`** provides a tmux-based interactive dashboard: test output (top-left), SMTP debug (bottom-left), live `zep --status` (top-right), simulator shell with `sim.sh` wrappers (bottom-right)
+
+### Running Tests
+
+```bash
+# Full suite (must be root or have ZFS privileges)
+bash tests/zep_replication_tests.sh
+
+# Specific tests
+bash tests/zep_replication_tests.sh --test 1 9 13
+
+# Skip slow resume tests
+bash tests/zep_replication_tests.sh --skip 11 12
+
+# Interactive tmux dashboard
+bash tests/tzepcon --test 1 2 3
+
+# Teardown
+bash tests/done.sh
+```
+
+### Test Development Gotchas
+
+1. **ZFS permissions are volatile on datasets**: When you `zfs destroy` and `zfs recv` recreates a dataset, dataset-level delegated permissions are lost. Pool-level permissions survive. Always re-delegate dataset perms after recreation.
+2. **`/tmp/zep_*` cleanup**: Stale lock/counter files block replication. `run_zep()` calls `clean_tmp()` before every invocation.
+3. **SSH key distribution**: If you change the user running tests, re-run `init.sh` to distribute the new user's SSH key to all zep-user accounts.
+4. **Ramdisk is tmpfs**: Data is in memory. On reboot or unmount, all pools are gone. Re-run `init.sh`.
+5. **No `make` needed for test scripts**: `make` only rebuilds `build/zep` from source files. Test scripts run as-is. However, `build/zep` must be up-to-date for the tests to reflect source changes.
+6. **Sequential dependency**: Tests build on each other's state. Running test 5 in isolation will fail because it expects state from tests 1-4.
+7. **Chain order matters**: The default chain is `node1,node3,node2`. Tests 15-16 specifically promote and verify non-sequential chain ordering.
+
 ## Git Repository
 - **Commit & Push**: Do not stage, commit, or push any changes unless specifically requested by the user. When asked to commit or prepare a commit, always start by gathering information using `git status` and `git diff HEAD`, then propose a draft commit message. Never push changes to a remote repository without an explicit instruction to do so.

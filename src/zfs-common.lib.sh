@@ -20,7 +20,7 @@ zpool() {
 
 ssh() {
     log_message "AUDIT: ssh $*"
-    command ssh "$@"
+    command ssh -o StrictHostKeyChecking=yes "$@"
 }
 
 # Associative array for in-memory property caching (per-run)
@@ -601,7 +601,7 @@ check_stuck_job() {
 
 # High-performance pipe monitor to track bytes and update progress file
 iomon() {
-    /usr/local/bin/iomon "$@"
+    command iomon "$@"
 }
 
 check_replication_progress() {
