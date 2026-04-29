@@ -5,44 +5,65 @@
 SDIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 export PS1='\[\e[36m\]sim>\[\e[0m\] '
 SESSION="${ZEP_SESSION:-zep-test}"
+DS="zep-node-1/test-1"
 
-test() {
-    case "${1:-}" in
-        stop)
-            tmux send-keys -t "${SESSION}:0.0" C-c
-            sleep 0.4
-            local pid pane_pid child
-            pane_pid=$(tmux list-panes -t "${SESSION}:0.0" -F '#{pane_pid}' 2>/dev/null)
-            if [[ -n "$pane_pid" ]]; then
-                child=$(pgrep -P "$pane_pid" -f "zep_replication_tests" | head -1)
-                [[ -n "$child" ]] && kill "$child" 2>/dev/null && echo "  Killed PID $child"
+config() {
+    local cmd="${1:-}"; shift 2>/dev/null || true
+    case "$cmd" in
+        get)
+            if [[ -z "${1:-}" ]]; then
+                zep "$DS" --alias node1 --config
+            else
+                zfs get -H -o value "zep:${1}" "$DS" 2>/dev/null
             fi
-            echo "  Test run stopped."
             ;;
-        start)
-            shift
-            tmux send-keys -t "${SESSION}:0.0" C-c
-            sleep 0.4
-            tmux send-keys -t "${SESSION}:0.0" "clear" C-m
-            sleep 0.1
-            local args="$*"
-            tmux send-keys -t "${SESSION}:0.0" "${SDIR}/zep_replication_tests.sh ${args}" C-m
-            echo "  Started: zep_replication_tests.sh ${args}"
+        set)
+            [[ -z "${1:-}" ]] && { echo "Usage: config set <prop>=<val>"; return 1; }
+            zep "$DS" --alias node1 --config --all "$1"
             ;;
-        '')
-            echo "Usage: test {start|stop}"
-            echo "  test start [--test N ...]   Run tests (no args = all)"
-            echo "  test stop                   Abort running test suite"
+        rm)
+            [[ -z "${1:-}" ]] && { echo "Usage: config rm <prop>"; return 1; }
+            zep "$DS" --alias node1 --config --all --clear "$1"
             ;;
         *)
-            echo "Unknown: test $1"
-            echo "Usage: test {start|stop}"
+            echo "Usage: config {get|set|rm} [args]"
+            echo "  config get            list all properties"
+            echo "  config get <prop>     read one property"
+            echo "  config set <prop>=<val>  assign a property"
+            echo "  config rm  <prop>     remove a property"
             ;;
     esac
+}
+
+stop() {
+    tmux send-keys -t "${SESSION}:0.0" C-c
+    sleep 0.4
+    local pane_pid child
+    pane_pid=$(tmux list-panes -t "${SESSION}:0.0" -F '#{pane_pid}' 2>/dev/null)
+    if [[ -n "$pane_pid" ]]; then
+        child=$(pgrep -P "$pane_pid" -f "zep_replication_tests" | head -1)
+        [[ -n "$child" ]] && kill "$child" 2>/dev/null && echo "  Killed PID $child"
+    fi
+    echo "  Test run stopped."
+}
+
+start() {
+    tmux send-keys -t "${SESSION}:0.0" C-c
+    sleep 0.4
+    tmux send-keys -t "${SESSION}:0.0" "clear" C-m
+    sleep 0.1
+    tmux send-keys -t "${SESSION}:0.0" "${SDIR}/zep_replication_tests.sh $*" C-m
+    echo "  Started: zep_replication_tests.sh $*"
 }
 
 keystroke() {
     local pane="${ZEP_PANE:-0.2}"
     tmux send-keys -t "${SESSION}:${pane}" "$*" C-m
     echo "  Sent to pane ${pane}: $*"
+}
+
+q() {
+    stop 2>/dev/null
+    tmux kill-session -t "$SESSION" 2>/dev/null
+    echo "  Session $SESSION killed."
 }

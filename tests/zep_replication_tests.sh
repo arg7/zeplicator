@@ -144,6 +144,8 @@ zfs allow zep-user-3 create,mount,receive,destroy,userprop,diff zep-node-3 2>/de
 out=$(run_zep "$DS" --alias node1 "$LABEL" --init); rc=$?
 assert_exit "exit !0"  "!0" "$rc"
 assert_out  "FOREIGN"  "$out" "FOREIGN DATASET"
+# cleanup: reset node3 for subsequent tests
+destroy_node3
 fi
 
 if should_run 4; then
@@ -424,6 +426,67 @@ assert_out  "cascade ok" "$out" "VERIFICATION SUCCESS"
 
 # Reset policy to fail for subsequent test runs
 "$ZEP_BIN" "$DS" --alias node1 --config policy=fail > /dev/null
+fi
+
+# ══════════════════════════════════════════════════════════
+# PROMOTION TESTS — chain master rotation
+# ══════════════════════════════════════════════════════════
+
+echo -e "\n${CYAN}=== Promotion Tests ===${RESET}"
+
+_get_chain() {
+    local node="$1"
+    zfs get -H -o value zep:chain "zep-node-${node}/test-${node}" 2>/dev/null
+}
+
+_promote() {
+    local node="$1"
+    local rc
+    "$ZEP_BIN" --alias "node${node}" "zep-node-${node}/test-${node}" --promote --auto -y > /dev/null 2>&1
+    rc=$?
+    return $rc
+}
+
+if should_run 15; then
+# ══════════════════════════════════════════════════════════
+# TEST 15: PROMOTE_NODE3 — promote middle node to master
+# ══════════════════════════════════════════════════════════
+echo -e "\n${CYAN}[15] PROMOTE_NODE3 — promote node3 to master${RESET}"
+destroy_node3
+run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
+
+_promote 3; rc=$?
+assert_exit "promote node3" "0" "$rc"
+
+chain=$(_get_chain 1)
+assert_out "chain node3,node1,node2" "$chain" "node3,node1,node2"
+
+out=$(run_zep "zep-node-3/test-3" --alias node3 "$LABEL"); rc=$?
+assert_exit "node3 master exit 0" "0" "$rc"
+assert_out  "node3 shipped" "$out" "Marking sent snapshot"
+
+out=$(run_zep "zep-node-1/test-1" --alias node1 "$LABEL"); rc=$?
+assert_exit "node1 non-master exit !0" "!0" "$rc"
+fi
+
+if should_run 16; then
+# ══════════════════════════════════════════════════════════
+# TEST 16: PROMOTE_NODE1_BACK — restore original master
+# ══════════════════════════════════════════════════════════
+echo -e "\n${CYAN}[16] PROMOTE_NODE1_BACK — promote node1 back to master${RESET}"
+
+_promote 1; rc=$?
+assert_exit "promote node1" "0" "$rc"
+
+chain=$(_get_chain 1)
+assert_out "chain restored" "$chain" "node1,node3,node2"
+
+out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+assert_exit "node1 master again exit 0" "0" "$rc"
+assert_out  "node1 shipped" "$out" "Marking sent snapshot"
+
+out=$(run_zep "zep-node-3/test-3" --alias node3 "$LABEL"); rc=$?
+assert_exit "node3 non-master exit !0" "!0" "$rc"
 fi
 
 echo ""

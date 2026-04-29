@@ -14,11 +14,32 @@ suite in a live, observable environment.
 
   TEST CONTROLS (pane 3)
   ──────────────────────
-  test start                 run all 14 tests
-  test start --test 13 14    run only resilience tests
-  test start --test 2 12     run only tests 2 and 12
-  test start --skip 11 13    skip resume and resilience tests
-  test stop                  abort running test suite (Ctrl-C + kill)
+  start                      run all 14 tests
+  start --test 13 14         run only resilience tests
+  start --test 2 12          run only tests 2 and 12
+  start --skip 11 13         skip resume and resilience tests
+  stop                       abort running test suite
+  q                          stop tests and exit tmux session
+
+  CONFIG (pane 3)
+  ───────────────
+  config get                 list all zep: properties
+  config get chain           read zep:chain
+  config get policy          read zep:policy
+  config set policy=resilience  switch to resilience mode
+  config set zfs:send_opt=-L    enable large blocks
+  config rm  policy          reset to default
+  config set <prop>=<val>    set any zep: property
+
+  KEY CONFIG PROPERTIES (on zep-node-1/test-1)
+  ─────────────────────────────────────────────
+  zep:chain           node1,node3,node2 (replication order)
+  zep:policy          fail | resilience (default: fail)
+  zep:zfs:send_opt    extra flags for zfs send (eg. -Lp)
+  zep:zfs:recv_opt    extra flags for zfs recv (default: -F)
+  zep:debug:throttle  iomon rate limit (eg. 32k, 128k)
+  zep:debug:send_timeout  iomon timeout in seconds
+  zep:suspend         true | false (pause replication)
 
   SIMULATOR CHEATSHEET (pane 3)
   ──────────────────────────────
@@ -53,8 +74,10 @@ suite in a live, observable environment.
   12  RESUME_FAILED     — mid-transfer snapshot loss
   13  RESILIENCE_NODE2_OFFLINE — offline node, partial success
   14  RESILIENCE_NODE2_RECOVERY — restored node, full success
+  15  PROMOTE_NODE3       — promote node3 to master
+  16  PROMOTE_NODE1_BACK   — restore node1 as master
 
   TO QUIT
   ───────
-  exit the tmux session with: Ctrl-B d  (detach)
-  or kill everything:           tmux kill-session -t zep-test
+  q                             stop tests + kill session
+  Ctrl-B d                      detach (leave session running)
