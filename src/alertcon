@@ -10,6 +10,22 @@ from datetime import datetime
 # Global alert counter — increments per alert during this session
 alert_counter = 1
 
+
+def _max_alert_id(log_file):
+    """Find the highest alert ID in the log file, or return 0 if none."""
+    if not os.path.exists(log_file):
+        return 0
+    max_id = 0
+    try:
+        with open(log_file, 'r') as f:
+            for line in f:
+                m = re.search(r'--- ALERT \((\d+)\) ---', line)
+                if m:
+                    max_id = max(max_id, int(m.group(1)))
+    except Exception:
+        pass
+    return max_id
+
 class ColorStrippingFormatter(logging.Formatter):
     """Strips ANSI escape sequences (colors) from log messages."""
     ANSI_ESCAPE = re.compile(r'\x1b\[[0-9;]*[mK]')
@@ -279,7 +295,7 @@ def show_by_id(log_file, id_filter, oneline):
         print(f"Alerts not found: {', '.join(str(a) for a in sorted(missing))}")
 
 def show_count(log_file):
-    """Print the number of alerts in the log."""
+    """Print the maximum alert ID in the log (monotonically increasing across restarts)."""
     if not os.path.exists(log_file):
         print("0")
         return
@@ -287,8 +303,11 @@ def show_count(log_file):
     with open(log_file, 'r') as f:
         content = f.read()
 
-    count = len(re.findall(r'--- ALERT \(\d+\) ---', content))
-    print(count)
+    ids = re.findall(r'--- ALERT \((\d+)\) ---', content)
+    if not ids:
+        print("0")
+    else:
+        print(max(int(i) for i in ids))
 
 def show_latest(log_file, oneline):
     """Show the latest (most recent) alert."""
@@ -400,6 +419,8 @@ def main():
         return
 
     # Server mode
+    global alert_counter
+    alert_counter = _max_alert_id(log_file) + 1
     host = "127.0.0.1"
     port = int(args.port_or_filter) if args.port_or_filter and args.port_or_filter.isdigit() else 1025
 

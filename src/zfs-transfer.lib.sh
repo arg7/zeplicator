@@ -360,7 +360,7 @@ zfsbud_core() {
                     fi
                 else
                     zbud_msg "  ${C_RED}❌ ERROR:${C_RESET} Divergence detected but no TTY. Use -y to force."
-                    return 1
+                    return 2
                 fi
             fi
             zbud_msg "  ${C_DIM}ℹ️${C_RESET}  Forcing alignment — remote data since @$common_snap_name will be discarded."
