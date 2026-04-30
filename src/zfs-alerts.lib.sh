@@ -6,6 +6,8 @@ send_smtp_alert() {
     local level="warn"
     local msg=""
     local include_detail=false
+    local task=""
+    local stat=""
 
     # Handle first argument as level if it matches known levels
     if [[ "$1" =~ ^(info|warning|warn|critical|error)$ ]]; then
@@ -18,6 +20,14 @@ send_smtp_alert() {
         case "$1" in
             --detail)
                 include_detail=true
+                ;;
+            --task)
+                task="$2"
+                shift
+                ;;
+            --status)
+                stat="$2"
+                shift
                 ;;
             *)
                 if [[ -z "$msg" ]]; then
@@ -96,6 +106,18 @@ send_smtp_alert() {
         fi
     fi
 
+    # Build subject: new structured format or legacy fallback
+    local kind="${level^}"
+    [[ "$level" == "warn" ]] && kind="Warning"
+    [[ "$level" == "error" ]] && kind="Error"
+    local node="${ME:-${my_hostname:-$(hostname)}}"
+    local subject
+    if [[ -n "$task" && -n "$stat" ]]; then
+        subject="ZEP ${kind}: ${node} ${task} ${stat}"
+    else
+        subject="ZFS Replication Alert: $filesystem on ${node}"
+    fi
+
     zbud_msg "  📧 Sending alert email to $to..."
     curl -s --url "${proto:-smtps}://${host}:${port:-465}" \
          --user "${user}:${pass}" \
@@ -104,7 +126,7 @@ send_smtp_alert() {
          --upload-file - <<EOF
 From: $from
 To: $to
-Subject: ZFS Replication Alert: $filesystem on ${ME:-${my_hostname:-$(hostname)}}
+Subject: ${subject}
 Date: $(date -R)
 
 $msg

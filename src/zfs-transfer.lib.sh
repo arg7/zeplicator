@@ -481,13 +481,13 @@ zfsbud_core() {
             plain_alert+="$clean_diff"
             plain_alert+=$'\n\n'
             plain_alert+="$clean_hint"
-            send_smtp_alert "critical" "$plain_alert"
+            send_smtp_alert "critical" --task "replication" --status "split-brain detected" "$plain_alert"
             return 2
         elif [[ -s "$err_log" ]] && grep -q "cannot resume" "$err_log"; then
             zbud_msg "  ${C_RED}🔄${C_RESET} Resume token invalidated — source snapshots destroyed mid-transfer."
             $remote_shell zfs recv -A "$remote_ds" 2>/dev/null && \
                 zbud_msg "  ${C_CYAN}ℹ️${C_RESET}  Destroyed stale resume token on $remote_ds."
-            send_smtp_alert "warning" "WARNING: Resume failed on $remote_ds — snapshots being transmitted were destroyed. Stale token cleared."
+            send_smtp_alert "warning" --task "replication" --status "resume failed" "WARNING: Resume failed on $remote_ds — snapshots being transmitted were destroyed. Stale token cleared."
             return $status
         elif [[ -s $err_log ]] && ! grep -vq "destination already exists" "$err_log"; then
             zbud_msg "  ⚠️  Destination snapshot already exists. Treating as success."
@@ -595,7 +595,7 @@ zfsbud_core() {
                 send_snapshot "$remote_ds" "true" || return $?
             else
                 zbud_warn "No common snapshots for $local_ds."
-                send_smtp_alert "warning" "WARNING: No common snapshots for $local_ds to $remote_ds."
+                send_smtp_alert "warning" --task "replication" --status "no common snapshots" "WARNING: No common snapshots for $local_ds to $remote_ds."
                 return 1
             fi
             ;;

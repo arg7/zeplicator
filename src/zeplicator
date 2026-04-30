@@ -597,7 +597,7 @@ if [[ "$SUSPEND" == true || "$RESUME" == true ]]; then
         ssh "${n_user}@${n_fqdn}" "zfs set zep:suspend=$VAL ${n_ds}" || echo -e "  ${C_YELLOW}⚠️  WARNING:${C_RESET} Failed to set property on $n"
     done
     
-    send_smtp_alert "info" "NOTICE: ZFS Replication has been ${ACTION} for filesystem $raw_filesystem on $my_hostname. Master node: ${nodes[0]}. New state: zep:suspend=$VAL"
+    send_smtp_alert "info" --task "replication" --status "${ACTION,,}" "NOTICE: ZFS Replication has been ${ACTION} for filesystem $raw_filesystem on $my_hostname. Master node: ${nodes[0]}. New state: zep:suspend=$VAL"
     exit 0
 fi
 
@@ -776,7 +776,7 @@ if [[ "$PROMOTE" == true ]]; then
             echo "  ✨ Updating local chain configuration..."
             zfs set zep:chain="$NEW_CHAIN" "$local_ds"
             REPL_CHAIN="$NEW_CHAIN"
-            send_smtp_alert "info" "NOTICE: Node $my_hostname has been PROMOTED to Master for filesystem $raw_filesystem. New chain: $NEW_CHAIN"
+            send_smtp_alert "info" --task "promotion" --status "complete" "NOTICE: Node $my_hostname has been PROMOTED to Master for filesystem $raw_filesystem. New chain: $NEW_CHAIN"
             # Refresh cache so prop encoding picks up the new chain
             cache_zfs_props "$local_ds"
 
@@ -1040,7 +1040,7 @@ if [[ "$IS_MASTER" == false ]]; then
             
             # 5. If age exceeds threshold, alert
             if [[ $AGE_SEC -gt $HB_THRESHOLD_SEC ]]; then
-                send_smtp_alert "critical" "CRITICAL: Upstream chain silent for label '${label}' on '${local_ds}'. Latest snapshot '${LATEST_SNAP_NAME}' is $((AGE_SEC/60)) minutes old (threshold: ${HB_THRESHOLD_RAW})."
+                send_smtp_alert "critical" --task "heartbeat" --status "lost" "CRITICAL: Upstream chain silent for label '${label}' on '${local_ds}'. Latest snapshot '${LATEST_SNAP_NAME}' is $((AGE_SEC/60)) minutes old (threshold: ${HB_THRESHOLD_RAW})."
             fi
         fi
     fi
@@ -1130,7 +1130,7 @@ PRE_REPL_SB=$(zfs get -H -o value zep:error:split-brain "$local_ds" 2>/dev/null)
 if [[ "$PRE_REPL_SB" == "true" ]]; then
     zfs inherit zep:error:split-brain "$local_ds" 2>/dev/null
     echo -e "${CHAIN_PREFIX}  ${C_CYAN}ℹ️${C_RESET}  Split-Brain condition resolved on $local_ds. Cleared error flag."
-    send_smtp_alert "warning" "NOTICE: Split-Brain condition on $local_ds has been resolved. The error flag has been cleared."
+    send_smtp_alert "warning" --task "replication" --status "split-brain resolved" "NOTICE: Split-Brain condition on $local_ds has been resolved. The error flag has been cleared."
     PRE_REPL_SB="false"
 fi
 
@@ -1178,7 +1178,7 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
             echo -e "${CHAIN_PREFIX}  ${C_RED}🚨 FATAL:${C_RESET} Split-Brain detected on $hop_node. Skipping due to policy=resilience..."
 
             # Send alert for skipped node in resilience mode
-            send_smtp_alert "critical" --detail "Split-Brain detected on $hop_node ($remote_ds). Skipping node and continuing chain due to policy=resilience."
+            send_smtp_alert "critical" --detail --task "replication" --status "split-brain skipped" "Split-Brain detected on $hop_node ($remote_ds). Skipping node and continuing chain due to policy=resilience."
 
             REPLICATION_PARTIAL=true
             TRANSFER_DONE=false
@@ -1263,7 +1263,7 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
         REPLICATION_SUCCESS=true
         
         if [[ "$initial_send" == true ]]; then
-            send_smtp_alert "info" --detail "SUCCESS: Initial replication of $local_ds completed successfully to $hop_node ($HOP_TARGET)."
+            send_smtp_alert "info" --detail --task "initial replication" --status "successful" "SUCCESS: Initial replication of $local_ds completed successfully to $hop_node ($HOP_TARGET)."
         fi
         
         CASCADE_VERIFIED=false

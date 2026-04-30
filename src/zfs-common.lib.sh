@@ -507,9 +507,9 @@ die() {
     if [[ -n "$local_ds" ]]; then
         if type send_smtp_alert >/dev/null 2>&1; then
             if [[ -n "$detail_flag" ]]; then
-                send_smtp_alert "critical" --detail "ERROR: $msg"
+                send_smtp_alert "critical" --detail --task "replication" --status "failed" "ERROR: $msg"
             else
-                send_smtp_alert "critical" "ERROR: $msg"
+                send_smtp_alert "critical" --task "replication" --status "failed" "ERROR: $msg"
             fi
         fi
     fi
@@ -587,7 +587,7 @@ check_stuck_job() {
             fi
 
             if type send_smtp_alert >/dev/null 2>&1; then
-                send_smtp_alert "critical" "CRITICAL: ZFS replication job for $filesystem ($label) is stuck. Lock file: $LOCKFILE. Age: $((age/60)) min. Timeout: $((timeout_val/60)) min. PID recorded: $lock_pid"
+                send_smtp_alert "critical" --task "replication" --status "stuck" "CRITICAL: ZFS replication job for $filesystem ($label) is stuck. Lock file: $LOCKFILE. Age: $((age/60)) min. Timeout: $((timeout_val/60)) min. PID recorded: $lock_pid"
             fi
             die "ERR: Stuck job detected ($age seconds old) at $LOCKFILE. Alert sent."
         else
