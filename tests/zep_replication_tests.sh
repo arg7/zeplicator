@@ -68,14 +68,17 @@ _test_table() {
 06|RESUME_FAILED|test_resume_failed
 07|RESILIENCE NODE2 OFFLINE|test_resilience_offline
 08|RESILIENCE NODE2 RECOVERY|test_resilience_recovery
-09|PROMOTE TO NODE3|test_promote
-10|PROMOTE BACK TO NODE1|test_promote_back
-11|NON-MASTER SKIP|test_non_master
-12|STATUS|test_status
-13|ROTATE|test_rotate
-14|FOREIGN DATASET|test_foreign_dataset
-15|MISSING PERMISSIONS|test_missing_perms
-16|MISSING POOL|test_missing_pool
+09|SPLIT-BRAIN RESILIENCE|test_splitbrain_resilience
+10|SPLIT-BRAIN ROLLBACK|test_splitbrain_rollback
+11|DIVERGENCE REPORT|test_divergence_report
+12|PROMOTE TO NODE3|test_promote
+13|PROMOTE BACK TO NODE1|test_promote_back
+14|NON-MASTER SKIP|test_non_master
+15|STATUS|test_status
+16|ROTATE|test_rotate
+17|FOREIGN DATASET|test_foreign_dataset
+18|MISSING PERMISSIONS|test_missing_perms
+19|MISSING POOL|test_missing_pool
 TABLE
 }
 
@@ -173,6 +176,49 @@ _promote() {
     "$ZEP_BIN" -bw --alias "node${node}" "zep-node-${node}/test-${node}" --promote --auto -y </dev/null > /dev/null 2>&1
     rc=$?
     return $rc
+}
+
+# ── split-brain helpers ───────────────────────────────────
+
+_write_error() {
+    local node="$1"
+    zfs set canmount=on "zep-node-${node}/test-${node}"
+    zfs mount "zep-node-${node}/test-${node}" 2>/dev/null
+    echo "divergent: $(date)" >> "/zep-node-${node}/test-${node}/error"
+    sync
+    zfs unmount "zep-node-${node}/test-${node}" 2>/dev/null
+    zfs set canmount=noauto "zep-node-${node}/test-${node}"
+}
+
+_rollback_node() {
+    local node="$1"
+    local snap
+    snap=$(zfs list -t snap -o name -H -S creation "zep-node-${node}/test-${node}" 2>/dev/null | grep '@zep_' | head -1 | cut -d@ -f2)
+    if [[ -z "$snap" ]]; then
+        echo "  ⚠️  No snapshot found on node${node}"
+        return 1
+    fi
+    zfs rollback -r "zep-node-${node}/test-${node}@${snap}" 2>/dev/null
+}
+
+_check_flag() {
+    local node="$1" expected="$2"
+    local val
+    val=$(zfs get -H -o value "zep:error:split-brain" "zep-node-${node}/test-${node}" 2>/dev/null)
+    if [[ "$val" == "$expected" || ("$val" == "-" && "$expected" == "false") ]]; then
+        echo -e "  ${GREEN}PASS${RESET} node${node} split-brain = '$val'"
+        ((PASS++))
+    else
+        echo -e "  ${RED}FAIL${RESET} node${node} split-brain = '$val' (expected '$expected')"
+        ((FAIL++))
+    fi
+}
+
+_set_chain() {
+    local chain="$1"
+    for n in 1 2 3; do
+        "$ZEP_BIN" -bw --alias "node${n}" "zep-node-${n}/test-${n}" --config "chain=${chain}" </dev/null > /dev/null 2>&1
+    done
 }
 
 # ── init ─────────────────────────────────────────────────
@@ -362,6 +408,59 @@ test_resilience_recovery() {
 
     # Reset policy to fail for subsequent test runs
     "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=fail </dev/null > /dev/null
+}
+
+test_splitbrain_resilience() {
+    destroy_node3
+    _set_chain "node1,node2,node3"
+    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
+
+    _write_error 2
+    out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+    assert_exit "split-brain node2 exit 2" "2" "$rc"
+    assert_out  "split-brain msg" "$out" "Split-Brain detected"
+    _check_flag 2 "true"
+
+    # Resilience: skip diverged node
+    "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=resilience </dev/null > /dev/null
+    out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+    assert_exit "resilience skip exit 3" "3" "$rc"
+    assert_out  "resilience skip" "$out" "Skipping due to policy=resilience"
+    _check_flag 2 "true"
+}
+
+test_splitbrain_rollback() {
+    "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=fail </dev/null > /dev/null
+
+    _rollback_node 2
+    _check_flag 2 "true"  # flag persists until successful replication
+
+    out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+    assert_exit "rollback recovery exit 0" "0" "$rc"
+    assert_out  "cascade ok" "$out" "VERIFICATION SUCCESS"
+    _check_flag 2 "false"
+}
+
+test_divergence_report() {
+    _write_error 2
+
+    local snap
+    snap=$(zfs list -t snap -o name -H -S creation zep-node-2/test-2 2>/dev/null | grep '@zep_' | head -1)
+
+    out=$(run_zep "zep-node-2/test-2" --alias node2 --divergence-report "${snap#*@}"); rc=$?
+    assert_exit "divergence-report exit 2" "2" "$rc"
+    assert_out  "report has details" "$out" "Modified files"
+    assert_out  "detects error" "$out" "error"
+
+    _rollback_node 2
+
+    out=$(run_zep "zep-node-2/test-2" --alias node2 --divergence-report "${snap#*@}"); rc=$?
+    assert_exit "divergence-report clean exit 0" "0" "$rc"
+
+    # Restore default chain + cleanup
+    _set_chain "node1,node3,node2"
+    destroy_node3
+    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
 }
 
 test_promote() {
