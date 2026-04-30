@@ -474,7 +474,7 @@ zfsbud_core() {
             $remote_shell zfs set zep:error:split-brain=true "$remote_ds" 2>/dev/null && \
                 zbud_msg "  ${C_CYAN}ℹ️${C_RESET}  Marked $remote_ds with split-brain error flag."
             return 2
-        elif [[ -s "$err_log" ]] && grep -q "cannot resume" "$err_log"; then
+        elif [[ -s "$err_log" ]] && grep -q "cannot receive resume stream" "$err_log"; then
             zbud_msg "  ${C_RED}🔄${C_RESET} Resume token invalidated — source snapshots destroyed mid-transfer."
             $remote_shell zfs recv -A "$remote_ds" 2>/dev/null && \
                 zbud_msg "  ${C_CYAN}ℹ️${C_RESET}  Destroyed stale resume token on $remote_ds."
