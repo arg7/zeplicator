@@ -236,7 +236,7 @@ fi
 if [[ "$chain_ok" == true ]]; then
     echo -e "${YELLOW}[setup]${RESET} Environment healthy, chain correct. Skipping init."
 else
-    echo -e "${YELLOW}[setup]${RESET} Initializing (chain: ${current_chain:-none})..."
+    echo -e "${YELLOW}[setup]${RESET} Initializing (chain: ${current_chain:-none} -> node1,node2,node3)..."
     for i in 1 2 3; do
         zpool import -f "zep-node-$i" 2>/dev/null && zpool destroy -f "zep-node-$i" 2>/dev/null || true
         zpool labelclear -f "/tmp/zep-ramdisk/zep-node-$i.img" 2>/dev/null || true
