@@ -290,7 +290,7 @@ test_resume_failed() {
     assert_out  "timeout msg" "$out" "iomon: timeout"
 
     # Verify resume token exists on node2
-    token=$(ssh zep-user-2@zep-node-2.local "zfs get -H -o value receive_resume_token zep-node-2/test-2" 2>/dev/null || echo "-")
+    token=$(ssh -n zep-user-2@zep-node-2.local "zfs get -H -o value receive_resume_token zep-node-2/test-2" 2>/dev/null || echo "-")
     if [[ "$token" != "-" ]]; then
         echo -e "  ${GREEN}PASS${RESET} resume token saved"; ((PASS++))
     else
@@ -309,7 +309,7 @@ test_resume_failed() {
     assert_out  "token destroyed" "$out" "Destroyed stale resume token"
 
     # Token should be cleared
-    token=$(ssh zep-user-2@zep-node-2.local "zfs get -H -o value receive_resume_token zep-node-2/test-2" 2>/dev/null || echo "-")
+    token=$(ssh -n zep-user-2@zep-node-2.local "zfs get -H -o value receive_resume_token zep-node-2/test-2" 2>/dev/null || echo "-")
     if [[ "$token" == "-" ]]; then
         echo -e "  ${GREEN}PASS${RESET} token cleared after failure"; ((PASS++))
     else
@@ -322,7 +322,7 @@ test_resume_failed() {
     assert_exit "clean run after failure" "0" "$rc"
 
     # Remaining snaps (1 and 5) should reach node2
-    rem=$(ssh zep-user-2@zep-node-2.local "zfs list -t snap -H -o name zep-node-2/test-2 2>/dev/null | grep -c 'zep_${LABEL}_snap_'" 2>/dev/null || echo 0)
+    rem=$(ssh -n zep-user-2@zep-node-2.local "zfs list -t snap -H -o name zep-node-2/test-2 2>/dev/null | grep -c 'zep_${LABEL}_snap_'" 2>/dev/null || echo 0)
     rem=$(echo "$rem" | tr -d '[:space:]')
     if [[ -n "$rem" && "$rem" -ge 2 ]]; then
         echo -e "  ${GREEN}PASS${RESET} remaining snaps on sink: $rem >= 2"; ((PASS++))
