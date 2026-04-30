@@ -381,7 +381,6 @@ apply_repl_props() {
                  if [[ "$DRY_RUN" == true ]]; then
                     echo -e "${CHAIN_PREFIX}    [DRY RUN] Would update $prop_key -> $new_val"
                  else
-                    echo -e "${CHAIN_PREFIX}    Updating $prop_key -> $new_val"
                     zfs set "$p" "$ds" || echo -e "${CHAIN_PREFIX}    ${C_YELLOW}⚠️  WARNING:${C_RESET} Failed to set $p"
                  fi
             fi
