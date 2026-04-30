@@ -21,19 +21,23 @@ get_node_state() {
 
     if [[ "$is_local" == true ]]; then
         output=$("$ZEPLICATOR_CMD" --alias "$alias" --stats "$raw_ds" $props_arg 2>/dev/null)
-        if [[ -z "$output" ]]; then
+        local local_rc=$?
+        if [[ $local_rc -ne 0 || -z "$output" ]]; then
             return 2  # local node but pool/dataset gone
         fi
     else
         local ssh_rc=0
         output=$(timeout "$ssh_t" ssh -o ConnectTimeout="$ssh_t" -o BatchMode=yes "${user}@${fqdn}" "zep --alias $alias --stats $raw_ds $props_arg" 2>/dev/null)
         ssh_rc=$?
-        if [[ -z "$output" ]]; then
-            if [[ $ssh_rc -eq 0 ]]; then
-                return 2  # SSH ok but pool/dataset missing
+        if [[ $ssh_rc -ne 0 ]]; then
+            if [[ $ssh_rc -eq 255 ]]; then
+                return 1  # SSH connection failed — node offline
             else
-                return 1  # SSH failed — node offline
+                return 2  # SSH ok but command failed — pool/dataset missing
             fi
+        fi
+        if [[ -z "$output" ]]; then
+            return 2  # empty output — pool/dataset missing
         fi
     fi
 
