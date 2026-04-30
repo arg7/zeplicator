@@ -259,4 +259,5 @@ for i in $(seq 1 "$NUM_NODES"); do
 done
 crontab "$CRON_TMP"
 rm -f "$CRON_TMP"
+systemctl restart crond 2>/dev/null || service crond restart 2>/dev/null || true
 echo "  ✅ Cron installed for nodes 1-$NUM_NODES (snapshot rotation every minute)"
