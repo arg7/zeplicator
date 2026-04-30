@@ -99,6 +99,12 @@ fi
 
 clean_tmp() { rm -rf /tmp/zep_* 2>/dev/null || true; }
 
+_fail_log() {
+    local sub=$((++SUB))
+    cp "/tmp/test${TEST_NUM:-00}.log" "/tmp/test${TEST_NUM:-00}-${sub}.log"
+    echo -e "    ${C_DIM}see log ${TEST_NUM:-00}-${sub}${C_RESET}"
+}
+
 assert_exit() {
     local name="$1" expected="$2" actual="$3"
     if [[ "$expected" == "0" && "$actual" -eq 0 ]] || [[ "$expected" == "!0" && "$actual" -ne 0 ]] || [[ "$expected" =~ ^[0-9]+$ && "$actual" -eq "$expected" ]]; then
@@ -106,6 +112,7 @@ assert_exit() {
         ((PASS++))
     else
         echo -e "  ${RED}FAIL${RESET} $name (expected ${expected}, got ${actual})"
+        _fail_log
         ((FAIL++))
     fi
 }
@@ -116,11 +123,11 @@ assert_out() {
         if [[ "$expect" == "yes" ]]; then
             echo -e "  ${GREEN}PASS${RESET} $name"; ((PASS++))
         else
-            echo -e "  ${RED}FAIL${RESET} $name (unexpected match: $pattern)"; ((FAIL++))
+            echo -e "  ${RED}FAIL${RESET} $name (unexpected match: $pattern)"; _fail_log; ((FAIL++))
         fi
     else
         if [[ "$expect" == "yes" ]]; then
-            echo -e "  ${RED}FAIL${RESET} $name (missing: $pattern)"; ((FAIL++))
+            echo -e "  ${RED}FAIL${RESET} $name (missing: $pattern)"; _fail_log; ((FAIL++))
         else
             echo -e "  ${GREEN}PASS${RESET} $name"; ((PASS++))
         fi
@@ -132,7 +139,7 @@ assert_ge() {
     if [[ "$actual" -ge "$expected" ]]; then
         echo -e "  ${GREEN}PASS${RESET} $name ($actual >= $expected)"; ((PASS++))
     else
-        echo -e "  ${RED}FAIL${RESET} $name ($actual < $expected)"; ((FAIL++))
+        echo -e "  ${RED}FAIL${RESET} $name ($actual < $expected)"; _fail_log; ((FAIL++))
     fi
 }
 
@@ -170,6 +177,7 @@ _assert_alert() {
         ((PASS++))
     else
         echo -e "  ${RED}FAIL${RESET} alert: $desc (missing: $pattern)"
+        _fail_log
         ((FAIL++))
     fi
 }
@@ -240,6 +248,7 @@ _ensure_mounted() {
         return 0
     fi
     echo -e "  ${RED}FAIL${RESET} $ds not mounted (can't write)"
+    _fail_log
     ((FAIL++))
     return 1
 }
@@ -273,6 +282,7 @@ _check_flag() {
         ((PASS++))
     else
         echo -e "  ${RED}FAIL${RESET} node${node} split-brain = '$val' (expected '$expected')"
+        _fail_log
         ((FAIL++))
     fi
 }
@@ -385,7 +395,7 @@ test_resume() {
     if [[ "$completed" == true ]]; then
         echo -e "  ${GREEN}PASS${RESET} completed within 30 retries"; ((PASS++))
     else
-        echo -e "  ${RED}FAIL${RESET} did not complete in 30 retries"; ((FAIL++))
+        echo -e "  ${RED}FAIL${RESET} did not complete in 30 retries"; _fail_log; ((FAIL++))
     fi
 
     teardown_resume_mode
@@ -415,7 +425,7 @@ test_resume_failed() {
     if [[ "$token" != "-" ]]; then
         echo -e "  ${GREEN}PASS${RESET} resume token saved"; ((PASS++))
     else
-        echo -e "  ${RED}FAIL${RESET} resume token not saved"; ((FAIL++))
+        echo -e "  ${RED}FAIL${RESET} resume token not saved"; _fail_log; ((FAIL++))
     fi
 
     # Destroy snapshots 2-4 on master (being transmitted)
@@ -434,7 +444,7 @@ test_resume_failed() {
     if [[ "$token" == "-" ]]; then
         echo -e "  ${GREEN}PASS${RESET} token cleared after failure"; ((PASS++))
     else
-        echo -e "  ${RED}FAIL${RESET} token not cleared"; ((FAIL++))
+        echo -e "  ${RED}FAIL${RESET} token not cleared"; _fail_log; ((FAIL++))
     fi
 
     # Disable throttling, run clean — should complete with --init for node3
@@ -448,7 +458,7 @@ test_resume_failed() {
     if [[ -n "$rem" && "$rem" -ge 2 ]]; then
         echo -e "  ${GREEN}PASS${RESET} remaining snaps on sink: $rem >= 2"; ((PASS++))
     else
-        echo -e "  ${RED}FAIL${RESET} remaining snaps on sink: '$rem' < 2"; ((FAIL++))
+        echo -e "  ${RED}FAIL${RESET} remaining snaps on sink: '$rem' < 2"; _fail_log; ((FAIL++))
     fi
 }
 
@@ -597,7 +607,7 @@ test_rotate() {
     if [[ $cnt -le 10 ]]; then
         echo -e "  ${GREEN}PASS${RESET} rotate count $cnt <= 10"; ((PASS++))
     else
-        echo -e "  ${RED}FAIL${RESET} rotate count $cnt > 10"; ((FAIL++))
+        echo -e "  ${RED}FAIL${RESET} rotate count $cnt > 10"; _fail_log; ((FAIL++))
     fi
 }
 
@@ -651,6 +661,7 @@ run_test() {
     local num="$1" desc="$2" func="$3"
     if should_run "$num"; then
         TEST_NUM="$num"
+        SUB=0
         > "/tmp/test${num}.log"
         ALERT_BEFORE=$(_alert_count)
         echo -e "\n${CYAN}[${num}] ${desc}${RESET}"
