@@ -254,7 +254,8 @@ _ensure_mounted() {
 }
 
 _write_error() {
-    local node="$1" ds="zep-node-${node}/test-${node}"
+    local node="$1"
+    local ds="zep-node-${node}/test-${node}"
     _ensure_mounted "$ds" || return 1
     echo "divergent: $(date)" >> "/zep-node-${node}/test-${node}/error"
     sync
@@ -498,6 +499,7 @@ test_resilience_recovery() {
 test_splitbrain_resilience() {
     destroy_node3
     run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
+    "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=fail --all </dev/null > /dev/null
 
     _write_error 2
     out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
@@ -506,7 +508,7 @@ test_splitbrain_resilience() {
     _check_flag 2 "true"
 
     # Resilience: skip diverged node
-    "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=resilience </dev/null > /dev/null
+    "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=resilience --all </dev/null > /dev/null
     out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
     assert_exit "resilience skip exit 3" "3" "$rc"
     assert_out  "resilience skip" "$out" "Skipping due to policy=resilience"

@@ -101,6 +101,9 @@ divergence_report() {
     found_divergence="true"
     report+="diff:\n"
     local diff_text
+    local was_mounted=false
+    [[ "$(zfs get -H -o value mounted "$ds" 2>/dev/null)" == "yes" ]] && was_mounted=true
+    [[ "$was_mounted" == false ]] && zfs set canmount=on "$ds" 2>/dev/null && zfs mount "$ds" 2>/dev/null
     diff_text=$(zfs diff "$prev" "$ds" 2>/dev/null | head -n 15 | awk '{print "  |  " $0}')
     if [[ -n "$diff_text" ]]; then
         report+="${diff_text}\n"
@@ -340,8 +343,10 @@ zfsbud_core() {
     local common_snap_name="${last_snapshot_common#*@}"
     if [[ -n "$remote_shell" ]]; then
         local div_output div_rc
+        echo "DBG: send_snapshot div-check remote_shell='$remote_shell' tds='$target_ds'" >> /tmp/dbg.txt
         div_output=$($remote_shell "zep --divergence-report $common_snap_name $target_ds" 2>&1)
         div_rc=$?
+        echo "DBG: div-check rc=$div_rc" >> /tmp/dbg.txt
 
         if [[ $div_rc -eq 2 ]]; then
             echo -e "${CHAIN_PREFIX}  ${C_YELLOW}⚠️  DIVERGENCE DETECTED${C_RESET} on $target_ds since snapshot @$common_snap_name"
