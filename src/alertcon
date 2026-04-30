@@ -246,16 +246,20 @@ def show_by_id(log_file, id_filter, oneline):
         print("No alerts found in log.")
         return
 
-    # Parse ID filter: single ID or range (e.g. "1" or "1-5")
+    # Resolve LAST keyword to the maximum alert ID
+    max_id = max(parsed_emails.keys())
+    resolved = re.sub(r'\bLAST\b', str(max_id), id_filter, flags=re.IGNORECASE)
+
+    # Parse ID filter: single ID or range (e.g. "1", "1-5", "3-LAST")
     target_ids = set()
     try:
-        if '-' in id_filter and not id_filter.startswith('-'):
-            start_str, end_str = id_filter.split('-')
+        if '-' in resolved and not resolved.startswith('-'):
+            start_str, end_str = resolved.split('-', 1)
             start = int(start_str)
             end = int(end_str)
             target_ids = set(range(min(start, end), max(start, end) + 1))
         else:
-            target_ids = {int(id_filter)}
+            target_ids = {int(resolved)}
     except ValueError:
         print(f"Invalid ID: {id_filter}. Use a number (5) or range (1-10).")
         return

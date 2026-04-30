@@ -139,6 +139,46 @@ run_zep() {
 
 destroy_node3() { zfs destroy -r zep-node-3/test-3 2>/dev/null || true; }
 
+# ── alert assertion helpers ───────────────────────────────
+
+ALERTCON="${SCRIPT_DIR}/../build/alertcon"
+
+_alert_count() {
+    "$ALERTCON" --count 2>/dev/null || echo 0
+}
+
+_alert_since() {
+    local since="$1"
+    local now
+    now=$(_alert_count)
+    if [[ "$now" -gt "$since" ]]; then
+        "$ALERTCON" --get "$((since+1))-LAST" --oneline 2>/dev/null
+    fi
+}
+
+_assert_alert() {
+    local desc="$1" output="$2" pattern="$3"
+    if echo "$output" | grep -qi "$pattern"; then
+        echo -e "  ${GREEN}PASS${RESET} alert: $desc"
+        ((PASS++))
+    else
+        echo -e "  ${RED}FAIL${RESET} alert: $desc (missing: $pattern)"
+        ((FAIL++))
+    fi
+}
+
+_check_alerts() {
+    local delta
+    delta=$(_alert_since "$ALERT_BEFORE")
+    if [[ -n "$delta" ]]; then
+        {
+            echo "--- alerts since #$ALERT_BEFORE ---"
+            echo "$delta"
+        } >> "/tmp/test${TEST_NUM:-00}.log"
+    fi
+    echo "$delta"
+}
+
 # ── section-specific helpers ─────────────────────────────
 
 setup_resume_mode() {
@@ -260,6 +300,8 @@ test_initial() {
         cnt=$(zfs list -t snap -H -o name -r zep-node-$i/test-$i 2>/dev/null | grep -c "$LABEL" || echo 0)
         assert_out "node$i snaps" "$cnt" "1"
     done
+    local alerts; alerts=$(_check_alerts)
+    _assert_alert "initial replication" "$alerts" "initial replication successful"
 }
 
 test_incremental() {
@@ -280,6 +322,8 @@ test_divergence() {
     out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
     assert_exit "exit !0"  "!0" "$rc"
     assert_out  "DIVERGENCE" "$out" "DIVERGENCE DETECTED"
+    local alerts; alerts=$(_check_alerts)
+    _assert_alert "split-brain" "$alerts" "split-brain detected"
 }
 
 test_divergence_override() {
@@ -434,6 +478,9 @@ test_splitbrain_resilience() {
     assert_exit "resilience skip exit 3" "3" "$rc"
     assert_out  "resilience skip" "$out" "Skipping due to policy=resilience"
     _check_flag 2 "true"
+    local alerts; alerts=$(_check_alerts)
+    _assert_alert "split-brain detected" "$alerts" "split-brain detected"
+    _assert_alert "split-brain skipped"   "$alerts" "split-brain skipped"
 }
 
 test_splitbrain_rollback() {
@@ -579,8 +626,9 @@ run_test() {
     if should_run "$num"; then
         TEST_NUM="$num"
         > "/tmp/test${num}.log"
+        ALERT_BEFORE=$(_alert_count)
         echo -e "\n${CYAN}[${num}] ${desc}${RESET}"
-        "$func"
+        "$func" </dev/null
     fi
 }
 
