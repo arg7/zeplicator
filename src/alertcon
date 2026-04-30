@@ -327,6 +327,35 @@ def show_latest(log_file, oneline):
         print(f"{timestamp} --- ALERT ({aid}) ---{mail_content}--------------------")
         print()
 
+def clear_alerts(log_file):
+    """Clear all logged alerts and reset rate-limit counters."""
+    import glob
+
+    cleared = []
+
+    if os.path.exists(log_file):
+        os.remove(log_file)
+        cleared.append(f"log: {log_file}")
+
+    state_pattern = "/tmp/zep*-repl-alerts/*.state"
+    for state_file in glob.glob(state_pattern):
+        os.remove(state_file)
+        cleared.append(f"state: {state_file}")
+
+    state_dirs = glob.glob("/tmp/zep*-repl-alerts")
+    for d in state_dirs:
+        try:
+            os.rmdir(d)
+        except OSError:
+            pass
+
+    if cleared:
+        for item in cleared:
+            print(f"Cleared {item}")
+        print(f"Removed {len(cleared)} item(s). Counters reset.")
+    else:
+        print("Nothing to clear.")
+
 def main():
     parser = argparse.ArgumentParser(description="Debug SMTP Server / Alert Log Viewer")
     parser.add_argument("port_or_filter", nargs="?", default=None, help="Port to listen on OR filter for --log")
@@ -337,10 +366,15 @@ def main():
     parser.add_argument("--grep", help="Pattern to search for in log mode")
     parser.add_argument("--count", action="store_true", help="Print number of alerts logged")
     parser.add_argument("--get", help="Show alert(s) by ID (e.g. --get 5 or --get 1-10)")
+    parser.add_argument("--clear", action="store_true", help="Clear all logged alerts and reset rate-limit counters")
 
     args = parser.parse_args()
 
-    log_file = f"/var/log/{os.path.basename(__file__)}.log"
+    log_file = f"/tmp/{os.path.basename(__file__)}.log"
+
+    if args.clear:
+        clear_alerts(log_file)
+        return
 
     if args.count:
         show_count(log_file)
