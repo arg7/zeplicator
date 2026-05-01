@@ -158,6 +158,32 @@ run_zep() {
 
 destroy_node3() { zfs destroy -r zep-node-3/test-3 2>/dev/null || true; }
 
+_guid_of_snap() {
+    local ds="$1" snap="$2"
+    zfs get -H -o value guid "${ds}@${snap}" 2>/dev/null
+}
+
+_verify_guid_on_sink() {
+    local desc="$1" expected_guid="$2" sink_ds="$3"
+    local found
+    found=$(zfs list -t snap -H -o guid "$sink_ds" 2>/dev/null | grep -c "^${expected_guid}$" || true)
+    if [[ "$found" -ge 1 ]]; then
+        echo -e "  ${GREEN}PASS${RESET} $desc (GUID $expected_guid on $sink_ds)"; ((PASS++))
+    else
+        echo -ne "  ${RED}FAIL${RESET} $desc (GUID $expected_guid not on $sink_ds)"; _fail_log; ((FAIL++))
+    fi
+}
+
+_pre_test_cleanup() {
+    for i in 2 3; do
+        zpool import -f -d /tmp/zep-ramdisk "zep-node-$i" 2>/dev/null || true
+    done
+    zfs destroy -r zep-node-2/test-2 2>/dev/null || true
+    zfs destroy -r zep-node-3/test-3 2>/dev/null || true
+    sleep 1
+    "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=fail </dev/null > /dev/null 2>&1
+}
+
 ALERTCON="${SCRIPT_DIR}/../build/alertcon"
 
 _alert_count() {
@@ -206,11 +232,9 @@ setup_resume_mode() {
 }
 teardown_resume_mode() {
     zfs inherit zep:debug:send_maxbytes "$DS" 2>/dev/null || zfs set zep:debug:send_maxbytes=- "$DS"
-    "$ZEP_BIN" -bw "$DS" --alias node1 --config zep:debug:send_maxbytes=- --all </dev/null > /dev/null 2>&1
-}
-teardown_resume_mode() {
     zfs inherit zep:debug:throttle "$DS" 2>/dev/null || zfs set zep:debug:throttle=- "$DS"
     zfs inherit zep:debug:send_timeout "$DS" 2>/dev/null || zfs set zep:debug:send_timeout=0 "$DS"
+    "$ZEP_BIN" -bw "$DS" --alias node1 --config zep:debug:send_maxbytes=- --all </dev/null > /dev/null 2>&1
     "$ZEP_BIN" -bw "$DS" --alias node1 --config zep:debug:throttle=- --all </dev/null > /dev/null 2>&1
     "$ZEP_BIN" -bw "$DS" --alias node1 --config zep:debug:send_timeout=0 --all </dev/null > /dev/null 2>&1
 }
@@ -340,14 +364,31 @@ test_initial() {
         cnt=$(zfs list -t snap -H -o name -r zep-node-$i/test-$i 2>/dev/null | grep -c "$LABEL" || true)
         assert_ge "node$i snaps" "$cnt" 1
     done
+    local latest_snap guid
+    latest_snap=$(zfs list -t snap -H -o name -S creation "$DS" 2>/dev/null | grep "@zep_" | head -1)
+    if [[ -n "$latest_snap" ]]; then
+        guid=$(_guid_of_snap "$DS" "${latest_snap#*@}")
+        _verify_guid_on_sink "init GUID on node3" "$guid" "zep-node-3/test-3"
+    fi
     local alerts; alerts=$(_check_alerts)
     _assert_alert "initial replication" "$alerts" "initial replication successful"
 }
 
 test_incremental() {
+    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
+    _ensure_mounted "zep-node-1/test-1" || return 1
+    echo "increment" >> /zep-node-1/test-1/inc.dat
+    sync
+    zfs snapshot "zep-node-1/test-1@zep_${LABEL}_inc_1" 2>/dev/null
+    sync
+    local latest_snap guid
+    latest_snap=$(zfs list -t snap -H -o name -S creation "$DS" 2>/dev/null | grep "@zep_" | head -1)
+    guid=$(_guid_of_snap "$DS" "${latest_snap#*@}")
+
     out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
     assert_exit "exit 0"   "0" "$rc"
     assert_out  "cascade"  "$out" "VERIFICATION SUCCESS"
+    _verify_guid_on_sink "inc GUID on node3" "$guid" "zep-node-3/test-3"
 }
 
 test_divergence() {
@@ -382,9 +423,16 @@ test_divergence() {
 }
 
 test_divergence_override() {
+    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
+    local ds3="zep-node-3/test-3"
+    _ensure_mounted "$ds3" || return 1
+    echo "diverged" >> "/${ds3}/div.dat"
+    sync; sleep 1
+    zfs unmount "$ds3" 2>/dev/null; zfs set canmount=noauto "$ds3"
+
     zfs set zep:zfs:recv_opt=-F "$DS"
-    out=$(run_zep "$DS" --alias node1 "$LABEL" -y); rc=$?
-    zfs inherit zep:zfs:recv_opt "$DS"
+    out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+    zfs inherit zep:zfs:recv_opt "$DS" 2>/dev/null || zfs set zep:zfs:recv_opt=- "$DS"
     assert_exit "exit 0"  "0" "$rc"
 }
 
@@ -472,8 +520,8 @@ test_resume_failed() {
     out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
     assert_exit "clean run after failure" "0" "$rc"
 
-    # Sink must have at least the new  snapshot
-    rem=$(ssh -n zep-user-2@zep-node-2.local "zfs list -t snap -H -o name zep-node-2/test-2 2>/dev/null | grep zep-node-1/test-1@zep_${LABEL}_snap_5 | wc -l" 2>/dev/null || true)
+    # Sink must have at least the new snapshot
+    rem=$(ssh -n zep-user-3@zep-node-3.local "zfs list -t snap -H -o name zep-node-3/test-3 2>/dev/null | grep zep-node-1/test-1@zep_${LABEL}_snap_5 | wc -l" 2>/dev/null || true)
     rem=$(echo "$rem" | tr -d '[:space:]')
     if [[ -n "$rem" && "$rem" -ge 1 ]]; then
         echo -e "  ${GREEN}PASS${RESET} sink snapshots: $rem >= 1"; ((PASS++))
@@ -483,7 +531,6 @@ test_resume_failed() {
 }
 
 test_resilience_offline() {
-    destroy_node3
     run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
 
     # Set policy=resilience on master
@@ -504,8 +551,14 @@ test_resilience_offline() {
 }
 
 test_resilience_recovery() {
+    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
+    "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=resilience </dev/null > /dev/null
+    isolate_node 2
+    for cycle in 1 2 3; do
+        run_zep "$DS" --alias node1 "$LABEL" > /dev/null
+    done
     restore_node 2
-    sleep 1 # let SSH cache clear
+    sleep 1
 
     out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
     assert_exit "restored exit 0" "0" "$rc"
@@ -516,8 +569,7 @@ test_resilience_recovery() {
 }
 
 test_splitbrain_resilience() {
-    #destroy_node3
-    run_zep "$DS" --alias node1 "$LABEL" > /dev/null
+    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
     "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=fail --all </dev/null > /dev/null
 
     _write_error 2
@@ -538,7 +590,12 @@ test_splitbrain_resilience() {
 }
 
 test_splitbrain_rollback() {
+    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
     "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=fail </dev/null > /dev/null
+    _write_error 2
+    out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+    assert_exit "split-brain node2 exit 2" "2" "$rc"
+    _check_flag 2 "true"
 
     _rollback_node 2
     _check_flag 2 "true"  # flag persists until successful replication
@@ -550,6 +607,7 @@ test_splitbrain_rollback() {
 }
 
 test_divergence_report() {
+    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
     _write_error 2
 
     local snap
@@ -589,6 +647,13 @@ test_promote() {
 }
 
 test_promote_back() {
+    destroy_node3
+    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
+    _promote 3; rc=$?
+    assert_exit "promote node3" "0" "$rc"
+    chain=$(_get_chain 1)
+    assert_out "chain node3,node1,node2" "$chain" "node3,node1,node2"
+
     _promote 1; rc=$?
     assert_exit "promote node1" "0" "$rc"
 
@@ -607,6 +672,7 @@ test_promote_back() {
 }
 
 test_non_master() {
+    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
     out=$(run_zep "zep-node-2/test-2" --alias node2 "$LABEL"); rc=$?
     assert_exit "exit !0"  "!0" "$rc"
     assert_out  "not master" "$out" "not Master"
@@ -622,6 +688,7 @@ test_status() {
 }
 
 test_rotate() {
+    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
     for i in 1 2 3; do clean_tmp; run_zep "$DS" --alias node1 "$LABEL" > /dev/null; done
     run_zep "$DS" --alias node1 --rotate > /dev/null
     cnt=$(zfs list -t snap -H -o name -r "$DS" 2>/dev/null | grep -c "$LABEL" || true)
@@ -686,6 +753,7 @@ run_test() {
         > "/tmp/test${num}.log"
         ALERT_BEFORE=$(_alert_count)
         echo -e "\n${CYAN}[${num}] ${desc}${RESET}"
+        _pre_test_cleanup
         "$func" </dev/null
     fi
 }
