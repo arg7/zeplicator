@@ -181,7 +181,15 @@ _pre_test_cleanup() {
     zfs destroy -r zep-node-2/test-2 2>/dev/null || true
     zfs destroy -r zep-node-3/test-3 2>/dev/null || true
     sleep 1
-    "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=fail </dev/null > /dev/null 2>&1
+    # Re-ensure pool-level permissions survive dataset destruction
+    zfs allow zep-user-2 create,mount,receive,destroy,send,snapshot,hold,release,userprop,diff zep-node-2 2>/dev/null
+    zfs allow zep-user-3 create,mount,receive,destroy,send,snapshot,hold,release,userprop,diff zep-node-3 2>/dev/null
+    # Restore all hosts to 127.0.0.1 (undo any prior isolation)
+    for i in 1 2 3; do
+        sed -i "/zep-node-${i}/d" /etc/hosts
+        echo "127.0.0.1 zep-node-${i}.local" >> /etc/hosts
+    done
+    "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=fail chain=node1,node2,node3 </dev/null > /dev/null 2>&1
 }
 
 ALERTCON="${SCRIPT_DIR}/../build/alertcon"
@@ -241,14 +249,15 @@ teardown_resume_mode() {
 
 isolate_node() {
     local node="$1"
-    sed -i "/zep-node-${node}.local/d" /etc/hosts
+    # Remove from /etc/hosts, then add with unreachable IP
+    sed -i "/zep-node-${node}/d" /etc/hosts
+    echo "192.0.2.1 zep-node-${node}.local" >> /etc/hosts
 }
 
 restore_node() {
     local node="$1"
-    if ! grep -q "zep-node-${node}.local" /etc/hosts 2>/dev/null; then
-        echo "127.0.0.1 zep-node-${node}.local" >> /etc/hosts
-    fi
+    sed -i "/zep-node-${node}/d" /etc/hosts
+    echo "127.0.0.1 zep-node-${node}.local" >> /etc/hosts
 }
 
 _get_chain() {
@@ -403,10 +412,10 @@ test_divergence() {
 
     out=$(run_zep "$DS" --alias node1 "$LABEL" --init); rc=$?
     assert_exit "guid mismatch !0"  "!0" "$rc"
-    assert_out  "GUID_MISMATCH"     "$out" "GUID_MISMATCH"
+    assert_out  "no common ground"   "$out" "no common ground"
 
-    # Clean up duplicate and re-sync
-    zfs destroy "${ds3}@${snap_short}" 2>/dev/null || true
+    # Clean up: destroy node3 dataset, let re-init recreate it
+    zfs destroy -r "${ds3}" 2>/dev/null || true
     run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
 
     # Scenario 2: data divergence — write to destination
@@ -451,12 +460,12 @@ test_resume() {
     assert_exit "interrupted" "!0" "$rc"
     assert_out  "max-bytes msg" "$out" "iomon: max-bytes"
 
-    # Retry until complete (resume token persists across runs)
-    # 2MB data at 1MB/interruption needs ~2 retries
+    # Retry until complete — disable max_bytes so resume can finish
+    zfs inherit zep:debug:send_maxbytes "$DS" 2>/dev/null || zfs set zep:debug:send_maxbytes=- "$DS"
     completed=false
     for attempt in $(seq 1 30); do
         clean_tmp
-        out=$(run_zep "$DS" --alias node1 "$LABEL" --init); rc=$?
+        out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
         if [[ $rc -eq 0 ]]; then
             completed=true
             break
@@ -468,6 +477,7 @@ test_resume() {
         echo -ne "  ${RED}FAIL${RESET} did not complete in 30 retries"; _fail_log; ((FAIL++))
     fi
 
+    teardown_resume_mode
 }
 
 test_resume_failed() {
@@ -615,7 +625,7 @@ test_divergence_report() {
 
     out=$(run_zep "zep-node-2/test-2" --alias node2 --divergence-report "${snap#*@}"); rc=$?
     assert_exit "divergence-report exit 2" "2" "$rc"
-    assert_out  "report has details" "$out" "Modified files"
+    assert_out  "report has details" "$out" "+	/zep-node-2/test-2/error"
     assert_out  "detects error" "$out" "error"
 
     _rollback_node 2

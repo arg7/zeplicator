@@ -448,7 +448,7 @@ zfsbud_core() {
     local iomon_max_bytes=$(get_zfs_prop "zep:debug:send_maxbytes" "$local_ds")
     [[ "$iomon_max_bytes" == "-" ]] && iomon_max_bytes=""
     log_message "IOMON: lock=$lock_path interval=1 timeout=$iomon_timeout rate=$iomon_rate max_bytes=$iomon_max_bytes"
-    local pipeline="zfs send $send_opt 2>>\"$err_log\" | iomon \"$lock_path\" 1 $iomon_timeout $iomon_rate $iomon_max_bytes | mbuffer -q $mbuffer_throttle -m \"$mbuffer_size\" 2>>\"$err_log\""
+    local pipeline="zfs send $send_opt 2>>\"$err_log\" | iomon \"$lock_path\" 1 ${iomon_timeout:-0} ${iomon_rate:-0} ${iomon_max_bytes:-0} | mbuffer -q $mbuffer_throttle -m \"$mbuffer_size\" 2>>\"$err_log\""
     if [[ -n "$remote_shell" ]]; then
         pipeline+=" | zstd 2>>\"$err_log\" | $remote_shell -o ConnectTimeout=\"$ssh_t\" \"zstd -d | zfs recv $recv_opt $remote_ds\" 2>>\"$err_log\""
     else
@@ -459,6 +459,7 @@ zfsbud_core() {
     local status=0
     set -o pipefail
     log_message "PIPELINE: $pipeline"
+    echo "PIPELINE: $pipeline" >&2
     eval "$pipeline"
     status=$?
     set +o pipefail
