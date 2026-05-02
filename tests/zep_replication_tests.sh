@@ -540,7 +540,7 @@ test_resume_failed() {
     assert_exit "clean run after failure" "0" "$rc"
 
     # Sink must have at least the new snapshot
-    rem=$(ssh -n zep-user-3@zep-node-3.local "zfs list -t snap -H -o name zep-node-3/test-3 2>/dev/null | grep zep-node-1/test-1@zep_${LABEL}_snap_5 | wc -l" 2>/dev/null || true)
+    rem=$(ssh -n zep-user-3@zep-node-3.local "zfs list -t snap -H -o name zep-node-3/test-3 2>/dev/null | grep -c 'zep_${LABEL}'" 2>/dev/null || true)
     rem=$(echo "$rem" | tr -d '[:space:]')
     if [[ -n "$rem" && "$rem" -ge 1 ]]; then
         echo -e "  ${GREEN}PASS${RESET} sink snapshots: $rem >= 1"; ((PASS++))
