@@ -5,6 +5,7 @@
 #include <string.h>
 #include <errno.h>
 #include <signal.h>
+#include <getopt.h>
 
 #define BUF_SIZE 1024 * 1024
 #define WRITE_CHUNK 1024
@@ -28,9 +29,11 @@ void handle_signal(int sig) {
 }
 
 static int parse_rate(const char *s) {
+    if (!s || !*s) return 0;
     char *end;
-    long val = strtol(s, &end, 10);
-    if (val <= 0 || *end == '\0') return (int)val;
+    long long val = strtoll(s, &end, 10);
+    if (val <= 0) return 0;
+    if (*end == '\0') return (int)val;
     switch (*end) {
         case 'k': case 'K': val *= 1024; break;
         case 'm': case 'M': val *= 1024 * 1024; break;
@@ -40,19 +43,92 @@ static int parse_rate(const char *s) {
     return (int)val;
 }
 
+static void print_usage(const char *prog) {
+    fprintf(stderr,
+        "Usage: %s [OPTIONS] <lock_file> <interval_sec>\n"
+        "\n"
+        "Pipeline monitor for zfs send/recv. Reads from stdin, writes to stdout,\n"
+        "periodically updates a .cnt progress file.\n"
+        "\n"
+        "Options:\n"
+        "  -t, --timeout SEC    Exit with code %d after SEC seconds of runtime\n"
+        "  -r, --throttle BYTES Throttle write rate (e.g. 32k, 1M)\n"
+        "  -c, --cut BYTES      Exit with code %d after transferring BYTES\n"
+        "  -h, --help           Show this help\n"
+        "\n"
+        "Backward-compatible positional form:\n"
+        "  %s <lock_file> <interval> [timeout] [rate] [max_bytes]\n",
+        prog, IOMON_STATUS_TIMEOUT, IOMON_STATUS_MAXBYTES, prog);
+}
+
 int main(int argc, char *argv[]) {
-    if (argc < 3) {
-        fprintf(stderr, "Usage: %s <lock_file> <interval_sec> [timeout_sec] [write_rate] [max_bytes]\n", argv[0]);
-        fprintf(stderr, "  write_rate: bytes/sec (supports k/M/G suffix), e.g. 16k\n");
-        fprintf(stderr, "  max_bytes: exit after transferring N bytes (supports k/M/G suffix)\n");
-        return 1;
+    int timeout_sec = 0;
+    int write_rate = 0;
+    int max_bytes = 0;
+    int opt_help = 0;
+
+    static struct option long_opts[] = {
+        {"timeout",  required_argument, 0, 't'},
+        {"throttle", required_argument, 0, 'r'},
+        {"cut",      required_argument, 0, 'c'},
+        {"help",     no_argument,       0, 'h'},
+        {0, 0, 0, 0}
+    };
+
+    // Check if any dashed options are present; if so, use getopt.
+    int has_dashed = 0;
+    for (int i = 1; i < argc; i++) {
+        if (argv[i][0] == '-') { has_dashed = 1; break; }
     }
 
-    const char *lock_base = argv[1];
-    int interval = atoi(argv[2]);
-    int timeout_sec = (argc >= 4) ? atoi(argv[3]) : 0;
-    int write_rate = (argc >= 5) ? parse_rate(argv[4]) : 0;
-    int max_bytes = (argc >= 6) ? parse_rate(argv[5]) : 0;
+    if (has_dashed) {
+        int c;
+        while ((c = getopt_long(argc, argv, "t:r:c:h", long_opts, NULL)) != -1) {
+            switch (c) {
+                case 't': timeout_sec = atoi(optarg); break;
+                case 'r': write_rate = parse_rate(optarg); break;
+                case 'c': max_bytes  = parse_rate(optarg); break;
+                case 'h': opt_help = 1; break;
+                default:
+                    fprintf(stderr, "Try '%s --help' for more information.\n", argv[0]);
+                    return 1;
+            }
+        }
+    }
+
+    if (opt_help) {
+        print_usage(argv[0]);
+        return 0;
+    }
+
+    const char *lock_base = NULL;
+    int interval = 0;
+
+    if (has_dashed) {
+        // Positional args are after --options
+        int pos = optind;
+        if (pos + 2 > argc) {
+            fprintf(stderr, "%s: missing required positional args <lock_file> <interval_sec>\n", argv[0]);
+            fprintf(stderr, "Try '%s --help' for more information.\n", argv[0]);
+            return 1;
+        }
+        lock_base = argv[pos];
+        interval  = atoi(argv[pos + 1]);
+    } else {
+        // Pure positional (backward compatible)
+        if (argc < 3) {
+            print_usage(argv[0]);
+            return 1;
+        }
+        lock_base = argv[1];
+        interval  = atoi(argv[2]);
+        if (argc >= 4) timeout_sec = atoi(argv[3]);
+        if (argc >= 5) write_rate  = parse_rate(argv[4]);
+        if (argc >= 6) max_bytes   = parse_rate(argv[5]);
+    }
+
+    if (interval <= 0) interval = 1;
+
     snprintf(g_cnt_file, sizeof(g_cnt_file), "%s.cnt", lock_base);
 
     signal(SIGTERM, handle_signal);
@@ -61,7 +137,7 @@ int main(int argc, char *argv[]) {
     unsigned char *buffer = malloc(BUF_SIZE);
     if (!buffer) return 1;
 
-    if (max_bytes > 0 && max_bytes < BUF_SIZE && max_bytes > 0) {
+    if (max_bytes > 0 && max_bytes < BUF_SIZE) {
         unsigned char *smaller = realloc(buffer, max_bytes);
         if (smaller) buffer = smaller;
     }
@@ -70,7 +146,6 @@ int main(int argc, char *argv[]) {
     time_t last_update = 0;
     ssize_t bytes_read;
 
-    // For write throttling: track bytes written in the current second
     int chunk_size = (write_rate > 0 && write_rate < WRITE_CHUNK) ? write_rate : WRITE_CHUNK;
     struct timespec chunk_delay = {0, 0};
     if (write_rate > 0) {
@@ -79,7 +154,6 @@ int main(int argc, char *argv[]) {
         chunk_delay.tv_nsec = (long)(delay_ns - chunk_delay.tv_sec * 1000000000.0);
     }
 
-    // Initial write
     write_progress();
 
     while ((bytes_read = read(STDIN_FILENO, buffer, BUF_SIZE)) > 0) {
@@ -93,13 +167,13 @@ int main(int argc, char *argv[]) {
         ssize_t bytes_written = 0;
         while (bytes_written < bytes_read) {
             if (timeout_sec > 0 && (time(NULL) - start_time >= timeout_sec)) {
-            fprintf(stderr, "iomon: timeout after %ds\n", timeout_sec);
-            write_progress();
-            free(buffer);
-            return IOMON_STATUS_TIMEOUT;
-        }
+                fprintf(stderr, "iomon: timeout after %ds\n", timeout_sec);
+                write_progress();
+                free(buffer);
+                return IOMON_STATUS_TIMEOUT;
+            }
 
-        ssize_t to_write = bytes_read - bytes_written;
+            ssize_t to_write = bytes_read - bytes_written;
             if (write_rate > 0 && to_write > chunk_size)
                 to_write = chunk_size;
 
@@ -125,7 +199,6 @@ int main(int argc, char *argv[]) {
         }
 
         time_t now = time(NULL);
-
         if (now - last_update >= interval) {
             write_progress();
             last_update = now;

@@ -146,6 +146,15 @@ assert_ge() {
     fi
 }
 
+assert_eq() {
+    local name="$1" expected="$2" actual="$3"
+    if [[ "$actual" == "$expected" ]]; then
+        echo -e "  ${GREEN}PASS${RESET} $name ($actual)"; ((PASS++))
+    else
+        echo -ne "  ${RED}FAIL${RESET} $name (expected $expected, got $actual)"; _fail_log; ((FAIL++))
+    fi
+}
+
 run_zep() {
     clean_tmp
     local out rc
@@ -189,7 +198,7 @@ _pre_test_cleanup() {
         sed -i "/zep-node-${i}/d" /etc/hosts
         echo "127.0.0.1 zep-node-${i}.local" >> /etc/hosts
     done
-    "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=fail chain=node1,node2,node3 </dev/null > /dev/null 2>&1
+    "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=fail chain=node1,node2,node3 zep:zfs:recv_opt=- zep:debug:send_maxbytes=- zep:debug:throttle=- zep:debug:send_timeout=0 </dev/null > /dev/null 2>&1
 }
 
 ALERTCON="${SCRIPT_DIR}/../build/alertcon"
@@ -698,15 +707,30 @@ test_status() {
 }
 
 test_rotate() {
+    # Disable cron rotation on all nodes (interferes with counting)
+    local cron_saved=$(crontab -l 2>/dev/null)
+    crontab -l 2>/dev/null | sed 's/^\(.*--rotate.*\)/#\1/' | crontab -
+    trap '[[ -n "$cron_saved" ]] && echo "$cron_saved" | crontab -' RETURN
+
     run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
     for i in 1 2 3; do clean_tmp; run_zep "$DS" --alias node1 "$LABEL" > /dev/null; done
+
+    # Create 3 manual (unshipped) snapshots
+    for i in 1 2 3; do
+        zfs snapshot "${DS}@zep_${LABEL}_manual_${i}" 2>/dev/null
+    done
+
+    # Set retention=2 for this label on master
+    zfs set "zep:role:master:keep:${LABEL}=2" "$DS"
+
     run_zep "$DS" --alias node1 --rotate > /dev/null
-    cnt=$(zfs list -t snap -H -o name -r "$DS" 2>/dev/null | grep -c "$LABEL" || true)
-    if [[ $cnt -le 10 ]]; then
-        echo -e "  ${GREEN}PASS${RESET} rotate count $cnt <= 10"; ((PASS++))
-    else
-        echo -ne "  ${RED}FAIL${RESET} rotate count $cnt > 10"; _fail_log; ((FAIL++))
-    fi
+
+    # Shipped snapshots should be purged; 3 manual unshipped should remain
+    local manual=$(zfs list -t snap -H -o name -r "$DS" 2>/dev/null | grep -c "zep_${LABEL}_manual" || true)
+    assert_eq "rotate: 3 manual remain" "3" "$manual"
+
+    # Cleanup: restore retention to default 10
+    zfs set "zep:role:master:keep:${LABEL}=10" "$DS"
 }
 
 test_foreign_dataset() {
