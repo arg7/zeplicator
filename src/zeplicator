@@ -238,7 +238,7 @@ validate_args() {
             # Re-invoke for each discovered dataset with the same flags
             _all_ok=true
             for _ds in "${_discovered[@]}"; do
-                "$0" "$_ds" "${ORIGINAL_ARGS[@]}"
+                "$0" --fs "$_ds" "${ORIGINAL_ARGS[@]}"
                 [[ $? -ne 0 ]] && _all_ok=false
             done
             $_all_ok && exit 0 || exit 1
