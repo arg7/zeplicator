@@ -30,7 +30,7 @@ resolve_retention() {
     echo "$val"
 }
 
-    purge_shipped_snapshots() {
+purge_shipped_snapshots() {
     local ds=$1
     local lbl=$2
     local k_count=$3
@@ -41,12 +41,12 @@ resolve_retention() {
     fi
 
     echo -e "${CHAIN_PREFIX}  ${C_YELLOW}🔄${C_RESET} Performing shipped-aware rotation for $ds (label: $lbl, keep: $k_count)..."
-    
+
     local prefix=$(get_snap_prefix "$ds")
     # Get snapshots matching label, sorted by creation date (newest first)
     mapfile -t snapshots < <(zfs list -t snapshot -H -o name,zep:shipped -S creation -r "$ds" | grep "@${prefix}${lbl}-")
 
-    local count=${#snaps[@]}
+    local count=${#snapshots[@]}
     if [[ $count -le $k_count ]]; then
         echo -e "${CHAIN_PREFIX}  ${C_GREEN}✅${C_RESET} Snapshot count ($count) is within limit ($k_count). Skipping purge."
         return
@@ -55,26 +55,34 @@ resolve_retention() {
     # Check if any snapshot in the KEEP range has shipped — if so, older unshipped snaps are safe to remove
     local newer_shipped=false
     for (( i=0; i<k_count; i++ )); do
-        [[ "${snaps[i]}" == *"true"* ]] && { newer_shipped=true; break; }
+        [[ "${snapshots[i]}" == *"true"* ]] && { newer_shipped=true; break; }
     done
 
     local purged_count=0
-    # Process snapshots from index k_count (0-indexed)
+    local kept_last_shipped=false
+    # Process snapshots from index k_count (0-indexed), newest first within purge range
     for (( i=k_count; i<count; i++ )); do
-        local line="${snaps[i]}"
+        local line="${snapshots[i]}"
         read -r snap_name shipped_val <<< "$line"
 
         if [[ "$shipped_val" == "true" ]]; then
-            if [[ "$DRY_RUN" == true ]]; then
+            if [[ "$kept_last_shipped" == false ]]; then
+                echo -e "${CHAIN_PREFIX}  ${C_BLUE}🛡️${C_RESET}  KEEPING last shipped snapshot (common ground): $snap_name"
+                kept_last_shipped=true
+                newer_shipped=true
+            elif [[ "$DRY_RUN" == true ]]; then
                 echo -e "${CHAIN_PREFIX}  ${C_RED}🗑️${C_RESET}  [DRY RUN] Would purge old shipped snapshot: $snap_name"
             else
                 echo -e "${CHAIN_PREFIX}  ${C_RED}🗑️${C_RESET}  Purging old shipped snapshot: $snap_name"
-                zfs destroy "$snap_name"
+                zfs destroy "$snap_name" 2>/dev/null || {
+                    echo -e "${CHAIN_PREFIX}  ${C_BLUE}🛡️${C_RESET}  Cannot destroy $snap_name (clone origin?), keeping for safety."
+                    continue
+                }
                 purged_count=$((purged_count + 1))
             fi
         elif [[ "$newer_shipped" == true ]]; then
             echo -e "${CHAIN_PREFIX}  ${C_RED}🗑️${C_RESET}  Purging old unshipped snapshot (newer shipped exists): $snap_name"
-            zfs destroy "$snap_name"
+            zfs destroy "$snap_name" 2>/dev/null || true
             purged_count=$((purged_count + 1))
         else
             echo -e "${CHAIN_PREFIX}  ${C_BLUE}🛡️${C_RESET}  KEEPING old snapshot (NOT YET SHIPPED): $snap_name"

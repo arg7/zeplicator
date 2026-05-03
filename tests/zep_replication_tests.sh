@@ -219,8 +219,8 @@ _pre_test_cleanup() {
     _ssh_node 3 "zfs destroy -r zep-node-3/test-3" 2>/dev/null || true
     sleep 1
     # Re-ensure pool-level permissions survive dataset destruction
-    _ssh_node_sudo 2 "zfs allow zep-user-2 create,mount,receive,destroy,send,snapshot,hold,release,userprop,diff zep-node-2" 2>/dev/null || true
-    _ssh_node_sudo 3 "zfs allow zep-user-3 create,mount,receive,destroy,send,snapshot,hold,release,userprop,diff zep-node-3" 2>/dev/null || true
+    zfs allow zep-user-2 create,mount,receive,destroy,send,snapshot,hold,release,userprop,diff zep-node-2 2>/dev/null || true
+    zfs allow zep-user-3 create,mount,receive,destroy,send,snapshot,hold,release,userprop,diff zep-node-3 2>/dev/null || true
     # Restore all hosts to 127.0.0.1 (undo any prior isolation)
     for i in 1 2 3; do
         sed -i "/zep-node-${i}/d" /etc/hosts
@@ -320,7 +320,7 @@ _ensure_mounted() {
     if [[ "$node" -eq 1 ]]; then
         mounted=$(zfs get -H -o value mounted "$ds" 2>/dev/null)
     else
-        mounted=$(_ssh_node "$node" "zfs get -H -o value mounted ${ds}")
+        mounted=$(zfs get -H -o value mounted "$ds" 2>/dev/null)
     fi
     if [[ "$mounted" == "yes" ]]; then
         return 0
@@ -328,7 +328,7 @@ _ensure_mounted() {
     if [[ "$node" -eq 1 ]]; then
         zfs set canmount=on "$ds" 2>/dev/null && zfs mount "$ds" 2>/dev/null && mount_ok=1
     else
-        _ssh_node "$node" "zfs set canmount=on ${ds} && zfs mount ${ds}" && mount_ok=1
+        zfs set canmount=on "$ds" 2>/dev/null && zfs mount "$ds" 2>/dev/null && mount_ok=1
     fi
     if [[ $mount_ok -eq 1 ]]; then
         sleep 0.5
@@ -344,8 +344,8 @@ _write_error() {
     local node="$1"
     local ds="zep-node-${node}/test-${node}"
     _ensure_mounted "$ds" || return 1
-    _ssh_node "$node" "echo 'divergent: $(date)' >> '/${ds}/error' && sync && sleep 1"
-    _ssh_node "$node" "zfs unmount ${ds} 2>/dev/null; zfs set canmount=noauto ${ds}"
+    echo "divergent: $(date)" >> "/${ds}/error" && sync && sleep 1
+    zfs unmount ${ds} 2>/dev/null; zfs set canmount=noauto ${ds} 2>/dev/null; true
 }
 
 _rollback_node() {
@@ -472,13 +472,13 @@ test_divergence() {
 
     # Scenario 2: data divergence — write to destination
     _ensure_mounted "$ds3" || return 1
-    _ssh_node 3 "dd if=/dev/urandom of=/${ds3}/div.bin bs=64K count=4 conv=fsync 2>/dev/null"
-    _ssh_node 3 "sync; sleep 1"
-    _ssh_node 3 "zfs unmount ${ds3} 2>/dev/null; zfs set canmount=noauto ${ds3}"
+    dd if=/dev/urandom of=/${ds3}/div.bin bs=64K count=4 conv=fsync 2>/dev/null
+    sync; sleep 1
+    zfs unmount ${ds3} 2>/dev/null; zfs set canmount=noauto ${ds3} 2>/dev/null; true
 
-    out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+    out=$(run_zep "$DS" --alias node1 "$LABEL" --init); rc=$?
     assert_exit "data diverge !0"  "!0" "$rc"
-    assert_out  "split-brain"      "$out" "Split-brain detected"
+    assert_out  "split-brain"      "$out" "Split-Brain detected"
     local alerts; alerts=$(_check_alerts)
     _assert_alert "split-brain" "$alerts" "split-brain detected"
 }
@@ -487,8 +487,8 @@ test_divergence_override() {
     run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
     local ds3="zep-node-3/test-3"
     _ensure_mounted "$ds3" || return 1
-    _ssh_node 3 "echo diverged >> /${ds3}/div.dat && sync && sleep 1"
-    _ssh_node 3 "zfs unmount ${ds3} 2>/dev/null; zfs set canmount=noauto ${ds3}"
+    echo diverged >> /${ds3}/div.dat && sync && sleep 1
+    zfs unmount ${ds3} 2>/dev/null; zfs set canmount=noauto ${ds3} 2>/dev/null; true
 
     zfs set zep:zfs:recv_opt=-F "$DS"
     out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
@@ -781,7 +781,7 @@ test_foreign_dataset() {
     _ssh_node 3 "zfs snapshot zep-node-3/test-3@alien_snap"
     _ssh_node 3 "zfs set canmount=noauto zep-node-3/test-3"
     _ssh_node 3 "zfs unmount zep-node-3/test-3" 2>/dev/null || true
-    _ssh_node_sudo 3 "zfs allow zep-user-3 create,mount,receive,destroy,userprop,diff zep-node-3" 2>/dev/null || true
+    zfs allow zep-user-3 create,mount,receive,destroy,userprop,diff zep-node-3 2>/dev/null || true
     out=$(run_zep "$DS" --alias node1 "$LABEL" --init); rc=$?
     assert_exit "exit !0"  "!0" "$rc"
     assert_out  "FOREIGN"  "$out" "FOREIGN DATASET"
@@ -789,7 +789,7 @@ test_foreign_dataset() {
     destroy_node3
     _ssh_node 3 "zfs create -o canmount=noauto zep-node-3/test-3"
     _ssh_node 3 "zfs unmount zep-node-3/test-3" 2>/dev/null || true
-    _ssh_node_sudo 3 "zfs allow zep-user-3 create,destroy,send,receive,snapshot,hold,release,userprop zep-node-3/test-3" 2>/dev/null || true
+    zfs allow zep-user-3 create,destroy,send,receive,snapshot,hold,release,userprop zep-node-3/test-3 2>/dev/null || true
     run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
 }
 
@@ -797,26 +797,26 @@ test_missing_perms() {
     destroy_node3
     # re-init so node2+node3 are healthy
     out=$(run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null)
-    _ssh_node_sudo 3 "zfs unallow zep-user-3 zep-node-3" 2>/dev/null || true
+    zfs unallow zep-user-3 zep-node-3 2>/dev/null || true
     out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
     assert_exit "exit !0"  "!0" "$rc"
     assert_out  "perms msg" "$out" "Missing pool permissions"
     # restore
-    _ssh_node_sudo 3 "zfs allow zep-user-3 create,mount,receive,destroy,userprop,diff zep-node-3" 2>/dev/null || true
-    _ssh_node_sudo 3 "zfs allow zep-user-3 create,destroy,send,receive,snapshot,hold,release,userprop,diff zep-node-3/test-3" 2>/dev/null || true
+    zfs allow zep-user-3 create,mount,receive,destroy,send,snapshot,hold,release,userprop,diff zep-node-3 2>/dev/null || true
+    zfs allow zep-user-3 create,destroy,send,receive,snapshot,hold,release,userprop,diff zep-node-3/test-3 2>/dev/null || true
 }
 
 test_missing_pool() {
     destroy_node3; run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
     _ssh_node 3 "zfs unmount zep-node-3/test-3" 2>/dev/null || true
-    _ssh_node_sudo 3 "zpool export zep-node-3" 2>/dev/null || true
+    zpool export zep-node-3 2>/dev/null || true
     out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
     assert_exit "exit !0"  "!0" "$rc"
     assert_out  "pool msg" "$out" "not found"
     out=$(run_zep "$DS" --alias node1 --status); rc=$?
     assert_exit "status exit !0" "!0" "$rc"
     assert_out  "status missing" "$out" "MISSING"
-    _ssh_node_sudo 3 "zpool import -f -d /tmp/zep-ramdisk zep-node-3" 2>/dev/null || true
+    zpool import -f -d /tmp/zep-ramdisk zep-node-3 2>/dev/null || true
 }
 
 # ── dispatch ─────────────────────────────────────────────

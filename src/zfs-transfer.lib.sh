@@ -318,7 +318,8 @@ zfsbud_core() {
     # 4. No snapshots on destination — clean dataset, safe for init
     if [[ ${#destination_snapshots[@]} -eq 0 ]]; then
         if [[ -n "$initial" ]]; then
-            zbud_msg "  ${C_DIM}ℹ️${C_RESET}  Target dataset exists but has no snapshots — clean init."
+            zbud_msg "  ${C_DIM}ℹ️${C_RESET}  Target dataset exists but has no snapshots — destroying for clean init."
+            $remote_shell "zfs destroy -r $target_ds" 2>/dev/null || true
             return $EXIT_NO_DATASET
         fi
         return 0
