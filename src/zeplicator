@@ -120,7 +120,7 @@ DIV_MODE=false
 DIV_COMMON=""
 
 CLI_ALIAS=""
-ORIGINAL_ARGS="$@"
+ORIGINAL_ARGS=("$@")
 
 # Parse arguments
 positional_args=()
@@ -145,6 +145,7 @@ while [[ $# -gt 0 ]]; do
         --target) TARGET_NODE="$2"; shift 2 ;;
         --donor) IS_DONOR=true; shift ;;
         --now) NOW_MODE=true; shift ;;
+        --label) LABEL_FILTER+=("$2"); shift 2 ;;
         --dry-run) DRY_RUN=true; shift ;;
         --snap-list) shift 2 ;;  # deprecated, kept for backward compat
         --status) STATUS_MODE=true; shift ;;
@@ -186,7 +187,7 @@ else REPL_LOG_CMD="replicate"
 fi
 
 trap 'log_message "INFO: exit_code=$?"' EXIT
-log_message "INFO: start: $0 $ORIGINAL_ARGS"
+log_message "INFO: start: $0 ${ORIGINAL_ARGS[*]}"
 
 # --- Pre-flight argument validation ---
 validate_args() {
@@ -212,10 +213,28 @@ validate_args() {
     # 1. Filesystem required (except for status/stats/config)
     if [[ "$STATUS_MODE" != true && "$STATS_MODE" != true && "$CONFIG_MODE" != true ]]; then
         if [[ -z "$raw_filesystem" ]]; then
-            # Only show usage if there are no other errors
-            if [[ ${#errors[@]} -eq 0 ]]; then
-                usage
+            # Auto-discover datasets where this node is the master (first in chain)
+            _my_alias=$(get_local_alias "" "$CLI_ALIAS")
+            _discovered=()
+            while IFS= read -r _ds; do
+                _chain=$(zfs get -H -o value zep:chain "$_ds" 2>/dev/null)
+                [[ -z "$_chain" || "$_chain" == "-" ]] && continue
+                _master="${_chain%%,*}"
+                [[ "$_master" == "$_my_alias" ]] && _discovered+=("$_ds")
+            done < <(zfs list -H -o name 2>/dev/null)
+            if [[ ${#_discovered[@]} -eq 0 ]]; then
+                echo "ERR: No datasets found where this node ($_my_alias) is the master (first in chain)."
+                echo "Set zep:chain=<master>,<middle>,<sink> and zep:node:<alias>:fs on each dataset."
+                exit 1
             fi
+            echo "  ℹ️  No dataset specified — discovered ${#_discovered[@]} master dataset(s): ${_discovered[*]}"
+            # Re-invoke for each discovered dataset with the same flags
+            _all_ok=true
+            for _ds in "${_discovered[@]}"; do
+                "$0" "$_ds" "${ORIGINAL_ARGS[@]}"
+                [[ $? -ne 0 ]] && _all_ok=false
+            done
+            $_all_ok && exit 0 || exit 1
         fi
     fi
 
@@ -1115,7 +1134,20 @@ if [[ "$LABEL_EXPLICIT" != true && "$IS_MASTER" == true && "$CASCADED" == false 
     if [[ ${#_labels[@]} -eq 0 ]]; then
         die "ERR: No labels with retention policies configured on $local_ds"
     fi
-    echo -e "  ℹ️  No label specified — replicating all configured: ${_labels[*]}"
+    # Apply --label filter if provided
+    if [[ ${#LABEL_FILTER[@]} -gt 0 ]]; then
+        _filtered=()
+        for _lbl in "${_labels[@]}"; do
+            for _flt in "${LABEL_FILTER[@]}"; do
+                [[ "$_lbl" == "$_flt" ]] && _filtered+=("$_lbl") && break
+            done
+        done
+        if [[ ${#_filtered[@]} -eq 0 ]]; then
+            die "ERR: None of the specified --label values match configured labels: ${_labels[*]}"
+        fi
+        _labels=("${_filtered[@]}")
+    fi
+    echo -e "  ℹ️  No label specified — replicating: ${_labels[*]}"
 else
     _labels=("$label")
 fi
