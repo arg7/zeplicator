@@ -81,7 +81,7 @@ Advanced Flags:
   --help, -h        Show this help message.
 
 Configuration Mode (--config):
-  $(basename "$0") <filesystem> --config [subcommand]
+  $(basename "$0") --fs <filesystem> --config [subcommand]
 
   --list            (Default) List all 'zep:' properties.
   --clear <key>     Remove a specific property (e.g., smtp:port).
@@ -94,7 +94,7 @@ Configuration Mode (--config):
 Configuration Examples:
   Set chain:      zfs set zep:chain=node1,node2,node3 tank/data
   Set retention:  zfs set zep:node:node1:keep:frequently=30 tank/data
-  View config:    zeplicator tank/data --config
+  View config:    zeplicator --fs tank/data --config
 
 EOF
     exit 0
@@ -214,8 +214,8 @@ validate_args() {
         errors+=("ERR: --promote requires one of: --auto, --snap <name>, or --align-chain-data")
     fi
 
-    # 1. Filesystem required (except for status/stats/config)
-    if [[ "$STATUS_MODE" != true && "$STATS_MODE" != true && "$CONFIG_MODE" != true ]]; then
+    # 1. Filesystem required (except for status/stats)
+    if [[ "$STATUS_MODE" != true && "$STATS_MODE" != true ]]; then
         if [[ -z "$raw_filesystem" ]]; then
             # Auto-discover datasets where this node is the master (first in chain)
             _my_alias=$(get_local_alias "" "$CLI_ALIAS")
@@ -277,8 +277,8 @@ validate_args() {
         for err in "${errors[@]}"; do
             echo "  - $err"
         done
-        echo ""
-        echo -e "${C_BOLD}Run '$(basename "$0") --help' for usage information.${C_RESET}"
+        [[ "$STATUS_MODE" != true && "$STATS_MODE" != true ]] && echo ""
+        [[ "$STATUS_MODE" != true && "$STATS_MODE" != true ]] && echo -e "${C_BOLD}Run '$(basename "$0") --help' for usage information.${C_RESET}"
         exit 1
     fi
 }
@@ -296,6 +296,31 @@ if [[ "$DIV_MODE" == true ]]; then
     snap_only="${DIV_COMMON##*@}"
     divergence_report "$raw_filesystem" "$snap_only" "$label"
     exit $?
+fi
+
+# Auto-discover for status mode (must happen before cache_zfs_props which requires a filesystem)
+if [[ "$STATUS_MODE" == true && -z "$raw_filesystem" ]]; then
+    _my_alias=$(get_local_alias "" "$CLI_ALIAS")
+    _discovered=()
+    while IFS= read -r _ds; do
+        _chain=$(zfs get -H -o value zep:chain "$_ds" 2>/dev/null)
+        [[ -z "$_chain" || "$_chain" == "-" ]] && continue
+        _node_fs=$(zfs get -H -o value "zep:node:${_my_alias}:fs" "$_ds" 2>/dev/null)
+        [[ "$_node_fs" == "$_ds" ]] && _discovered+=("$_ds")
+    done < <(zfs list -H -o name 2>/dev/null)
+    if [[ ${#_discovered[@]} -eq 0 ]]; then
+        echo "ERR: No datasets found where node $_my_alias manages the filesystem."
+        exit 1
+    fi
+    if [[ ${#_discovered[@]} -gt 1 ]]; then
+        echo "  ℹ️  No dataset specified — discovered ${#_discovered[@]} dataset(s) managed by ${_my_alias}: ${_discovered[*]}"
+    fi
+    _all_ok=true
+    for _ds in "${_discovered[@]}"; do
+        "$0" --fs "$_ds" "${ORIGINAL_ARGS[@]}"
+        [[ $? -ne 0 ]] && _all_ok=false
+    done
+    $_all_ok && exit 0 || exit 1
 fi
 
 # Cache ZFS properties early — before any get_zfs_prop calls

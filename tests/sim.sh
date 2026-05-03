@@ -12,18 +12,18 @@ config() {
     case "$cmd" in
         get)
             if [[ -z "${1:-}" ]]; then
-                zep "$DS" --alias node1 --config
+            zep --fs "$DS" --alias node1 --config
             else
                 zfs get -H -o value "zep:${1}" "$DS" 2>/dev/null
             fi
             ;;
         set)
             [[ -z "${1:-}" ]] && { echo "Usage: config set <prop>=<val>"; return 1; }
-            zep "$DS" --alias node1 --config --all "$1"
+            zep --fs "$DS" --alias node1 --config --all "$1"
             ;;
         rm)
             [[ -z "${1:-}" ]] && { echo "Usage: config rm <prop>"; return 1; }
-            zep "$DS" --alias node1 --config --all --clear "$1"
+            zep --fs "$DS" --alias node1 --config --all --clear "$1"
             ;;
         *)
             echo "Usage: config {get|set|rm} [args]"

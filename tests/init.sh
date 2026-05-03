@@ -614,7 +614,7 @@ _main() {
         # Generate and import config
         _generate_config
         echo "Importing configuration to $(get_node_ds 1)..."
-        "$ZEP_BIN" "$(get_node_ds 1)" --alias node1 --config --import "$MASTER_CONFIG"
+        "$ZEP_BIN" --fs "$(get_node_ds 1)" --alias node1 --config --import "$MASTER_CONFIG"
 
         # Install cron on all nodes
         _setup_distributed_cron
@@ -634,7 +634,7 @@ _main() {
 
         _generate_config
         echo "Importing configuration to $(get_node_ds 1)..."
-        "$ZEP_BIN" "$(get_node_ds 1)" --alias node1 --config --import "$MASTER_CONFIG"
+        "$ZEP_BIN" --fs "$(get_node_ds 1)" --alias node1 --config --import "$MASTER_CONFIG"
 
         _setup_sim_cron
     fi

@@ -48,11 +48,6 @@ cmd_status() {
     local raw_filesystem="$1"
     local configured_only="${2:-false}"
 
-    if [[ -z "$raw_filesystem" ]]; then
-        readarray -t filesystems < <(zfs list -H -o name | while read ds; do if zfs get -H -o value zep:chain "$ds" 2>/dev/null | grep -qv "^-$"; then echo "$ds"; fi; done)
-        [[ ${#filesystems[@]} -eq 0 ]] && die "ERR: No filesystems with zep:chain found."
-        raw_filesystem="${filesystems[0]}"
-    fi
     REPL_CHAIN=$(get_zfs_prop "zep:chain" "$raw_filesystem")
     [[ -z "$REPL_CHAIN" ]] && die "ERR: No replication chain found."
     IFS=',' read -r -a nodes <<< "$REPL_CHAIN"
