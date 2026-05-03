@@ -549,7 +549,7 @@ test_resume() {
     # Run — expect interruption at 1MB
     out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL"); rc=$?
     assert_exit "interrupted" "!0" "$rc"
-    assert_out  "max-bytes msg" "$out" "iomon: max-bytes"
+    assert_out  "max-bytes msg" "$out" "zpipe: max-bytes"
 
     # Retry until complete — disable max_bytes so resume can finish
     zfs inherit zep:debug:send_maxbytes "$DS" 2>/dev/null || zfs set zep:debug:send_maxbytes=- "$DS"
@@ -587,7 +587,7 @@ test_resume_failed() {
     # Run — will be interrupted, token saved on node2
     out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL"); rc=$?
     assert_exit "interrupted" "!0" "$rc"
-    assert_out  "max-bytes msg" "$out" "iomon: max-bytes"
+    assert_out  "max-bytes msg" "$out" "zpipe: max-bytes"
 
     # Verify resume token exists on node2
     token=$(_ssh_node 2 "zfs get -H -o value receive_resume_token zep-node-2/test-2" 2>/dev/null || echo "-")

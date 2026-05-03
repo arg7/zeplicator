@@ -1,6 +1,6 @@
 BUILD_DIR := build
 OUTPUT := $(BUILD_DIR)/zep
-IOMON := $(BUILD_DIR)/iomon
+IOMON := $(BUILD_DIR)/zpipe
 ALERTCON := $(BUILD_DIR)/alertcon
 LIBS := src/zfs-common.lib.sh src/zfs-stats.lib.sh src/zfs-status.lib.sh src/zfs-alerts.lib.sh src/zfs-retention.lib.sh src/zfs-transfer.lib.sh
 MAIN := src/zeplicator
@@ -16,16 +16,16 @@ install: all
 	@echo "Installing to $(DESTDIR)$(BINDIR)..."
 	mkdir -p $(DESTDIR)$(BINDIR)
 	cp $(OUTPUT) $(DESTDIR)$(BINDIR)/zep
-	cp $(IOMON) $(DESTDIR)$(BINDIR)/iomon
+	cp $(IOMON) $(DESTDIR)$(BINDIR)/zpipe
 	cp $(ALERTCON) $(DESTDIR)$(BINDIR)/alertcon
-	chmod +x $(DESTDIR)$(BINDIR)/zep $(DESTDIR)$(BINDIR)/iomon $(DESTDIR)$(BINDIR)/alertcon
+	chmod +x $(DESTDIR)$(BINDIR)/zep $(DESTDIR)$(BINDIR)/zpipe $(DESTDIR)$(BINDIR)/alertcon
 	@echo "Installation complete."
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-$(IOMON): src/iomon.c | $(BUILD_DIR)
-	@echo "Compiling iomon.c..."
+$(IOMON): src/zpipe.c | $(BUILD_DIR)
+	@echo "Compiling zpipe.c..."
 	gcc -O3 $< -o $@
 
 $(ALERTCON): src/alertcon | $(BUILD_DIR)

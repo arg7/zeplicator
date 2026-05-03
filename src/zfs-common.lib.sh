@@ -616,8 +616,8 @@ check_stuck_job() {
 }
 
 # High-performance pipe monitor to track bytes and update progress file
-iomon() {
-    command iomon "$@"
+zpipe() {
+    command zpipe "$@"
 }
 
 check_replication_progress() {

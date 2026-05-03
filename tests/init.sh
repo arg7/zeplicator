@@ -28,7 +28,7 @@ ZFS_FUSE=false
 
 # ── dependency check ──────────────────────────────────────
 SYSTEM_DEPS=("zfs" "zpool" "ssh" "mbuffer" "zstd" "curl" "tmux")
-PROJECT_DEPS=("zep" "iomon")
+PROJECT_DEPS=("zep" "zpipe")
 MISSING_SYSTEM=()
 MISSING_PROJECT=()
 

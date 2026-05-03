@@ -158,7 +158,7 @@ int main(int argc, char *argv[]) {
 
     while ((bytes_read = read(STDIN_FILENO, buffer, BUF_SIZE)) > 0) {
         if (timeout_sec > 0 && (time(NULL) - start_time >= timeout_sec)) {
-            fprintf(stderr, "iomon: timeout after %ds\n", timeout_sec);
+            fprintf(stderr, "zpipe: timeout after %ds\n", timeout_sec);
             write_progress();
             free(buffer);
             return IOMON_STATUS_TIMEOUT;
@@ -167,7 +167,7 @@ int main(int argc, char *argv[]) {
         ssize_t bytes_written = 0;
         while (bytes_written < bytes_read) {
             if (timeout_sec > 0 && (time(NULL) - start_time >= timeout_sec)) {
-                fprintf(stderr, "iomon: timeout after %ds\n", timeout_sec);
+                fprintf(stderr, "zpipe: timeout after %ds\n", timeout_sec);
                 write_progress();
                 free(buffer);
                 return IOMON_STATUS_TIMEOUT;
@@ -192,7 +192,7 @@ int main(int argc, char *argv[]) {
         g_total_bytes += bytes_read;
 
         if (max_bytes > 0 && g_total_bytes >= (unsigned long long)max_bytes) {
-            fprintf(stderr, "iomon: max-bytes limit after %llu bytes\n", g_total_bytes);
+            fprintf(stderr, "zpipe: max-bytes limit after %llu bytes\n", g_total_bytes);
             write_progress();
             free(buffer);
             return IOMON_STATUS_MAXBYTES;

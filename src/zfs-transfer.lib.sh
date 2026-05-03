@@ -396,8 +396,8 @@ zfsbud_core() {
     local debug_timeout=$(get_zfs_prop "zep:debug:send_timeout" "$local_ds")
     [[ "$debug_timeout" =~ ^[0-9]+[smhdMY]$ ]] && debug_timeout=$(parse_time_to_seconds "$debug_timeout")
     [[ ! "$debug_timeout" =~ ^[0-9]+$ ]] && debug_timeout=""
-    local iomon_timeout=""
-    [[ "$debug_timeout" =~ ^[0-9]+$ && "$debug_timeout" -gt 0 ]] && iomon_timeout="$debug_timeout"
+    local zpipe_timeout=""
+    [[ "$debug_timeout" =~ ^[0-9]+$ && "$debug_timeout" -gt 0 ]] && zpipe_timeout="$debug_timeout"
 
     # --- Compute send/recv options ---
     local send_opt recv_opt transfer_label snap_name=""
@@ -455,16 +455,16 @@ zfsbud_core() {
     zbud_msg "  🚀 Sending $transfer_label replication to $remote_ds..."
 
     # --- Build pipeline ---
-    local iomon_rate=$(get_zfs_prop "zep:debug:throttle" "$local_ds")
-    [[ "$iomon_rate" == "-" ]] && iomon_rate=""
-    local iomon_max_bytes=$(get_zfs_prop "zep:debug:send_maxbytes" "$local_ds")
-    [[ "$iomon_max_bytes" == "-" ]] && iomon_max_bytes=""
+    local zpipe_rate=$(get_zfs_prop "zep:debug:throttle" "$local_ds")
+    [[ "$zpipe_rate" == "-" ]] && zpipe_rate=""
+    local zpipe_max_bytes=$(get_zfs_prop "zep:debug:send_maxbytes" "$local_ds")
+    [[ "$zpipe_max_bytes" == "-" ]] && zpipe_max_bytes=""
     local args=""
-    [[ -n "$iomon_timeout" && "$iomon_timeout" != "0" ]] && args+=" --timeout $iomon_timeout"
-    [[ -n "$iomon_rate" && "$iomon_rate" != "0" ]] && args+=" --throttle $iomon_rate"
-    [[ -n "$iomon_max_bytes" && "$iomon_max_bytes" != "0" ]] && args+=" --cut $iomon_max_bytes"
-    log_message "IOMON: lock=$lock_path interval=1 timeout=$iomon_timeout rate=$iomon_rate max_bytes=$iomon_max_bytes"
-    local pipeline="zfs send $send_opt 2>>\"$err_log\" | iomon \"$lock_path\" 1${args} | mbuffer -q $mbuffer_throttle -m \"$mbuffer_size\" 2>>\"$err_log\""
+    [[ -n "$zpipe_timeout" && "$zpipe_timeout" != "0" ]] && args+=" --timeout $zpipe_timeout"
+    [[ -n "$zpipe_rate" && "$zpipe_rate" != "0" ]] && args+=" --throttle $zpipe_rate"
+    [[ -n "$zpipe_max_bytes" && "$zpipe_max_bytes" != "0" ]] && args+=" --cut $zpipe_max_bytes"
+    log_message "ZPIPE: lock=$lock_path interval=1 timeout=$zpipe_timeout rate=$zpipe_rate max_bytes=$zpipe_max_bytes"
+    local pipeline="zfs send $send_opt 2>>\"$err_log\" | zpipe \"$lock_path\" 1${args} | mbuffer -q $mbuffer_throttle -m \"$mbuffer_size\" 2>>\"$err_log\""
     if [[ -n "$remote_shell" ]]; then
         pipeline+=" | zstd 2>>\"$err_log\" | $remote_shell -o ConnectTimeout=\"$ssh_t\" \"zstd -d | zfs recv $recv_opt $remote_ds\" 2>>\"$err_log\""
     else
@@ -526,8 +526,8 @@ zfsbud_core() {
     fi
 
     # --- Unified success logging ---
-    local iomon_size=$(cat "${lock_path}.cnt" 2>/dev/null | numfmt --to=iec 2>/dev/null || echo 0)
-    log_message "REPLICATION: Successfully sent $transfer_label replication for $local_ds to $remote_ds (total size: $iomon_size)"
+    local zpipe_size=$(cat "${lock_path}.cnt" 2>/dev/null | numfmt --to=iec 2>/dev/null || echo 0)
+    log_message "REPLICATION: Successfully sent $transfer_label replication for $local_ds to $remote_ds (total size: $zpipe_size)"
 
     local delay=$(get_zfs_prop "zep:debug:send_delay" "$local_ds")
     if [[ "$delay" =~ ^[0-9]+$ && "$delay" -gt 0 ]]; then

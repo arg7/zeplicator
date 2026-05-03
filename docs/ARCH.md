@@ -4,7 +4,7 @@
 
 Zeplicator is a modular ZFS replication manager designed for peer-to-peer donor discovery and split-brain safety. It manages snapshot-based replication across a chain of nodes, with per-dataset configuration stored directly on ZFS datasets as user properties.
 
-The project uses a **Compiled Standalone** model: source files are assembled by `make` into a single self-contained `build/zep` script plus a compiled `build/iomon` C binary.
+The project uses a **Compiled Standalone** model: source files are assembled by `make` into a single self-contained `build/zep` script plus a compiled `build/zpipe` C binary.
 
 ### File Layout
 
@@ -17,11 +17,11 @@ src/
   zfs-alerts.lib.sh       # SMTP alerting with per-dataset rate limiting
   zfs-retention.lib.sh    # Snapshot rotation with shipped-aware purge logic
   zfs-transfer.lib.sh     # Replication engine: zfs send/recv pipeline with split-brain detection
-  iomon.c                 # C pipe monitor for transfer byte-progress tracking
+  zpipe.c                 # C pipe monitor for transfer byte-progress tracking
 Makefile                  # Assembly: strips shebangs/source lines, concatenates into build/zep
 build/                    # Output directory
   zep                    # Assembled standalone executable
-  iomon                  # Compiled C binary
+  zpipe                  # Compiled C binary
 ```
 
 ### Assembly Order (function dependency)
@@ -132,7 +132,7 @@ The core pipeline is built by `send_snapshot()` in `zfs-transfer.lib.sh:240`:
 
 ```
 zfs send [flags] 2>>err_log \
-  | iomon <lock_path> 1 [timeout] \
+  | zpipe <lock_path> 1 [timeout] \
   | mbuffer -q -r <throttle> -m <mbuffer_size> 2>>err_log \
   | zstd 2>>err_log \
   | ssh -o ConnectTimeout=<t> "zstd -d | zfs recv [flags] <remote_ds>" 2>>err_log
@@ -228,7 +228,7 @@ Non-master nodes check `zep:alert:heartbeat:<label>`. If the latest snapshot for
 
 ---
 
-## IO Monitoring (`iomon.c`)
+## IO Monitoring (`zpipe.c`)
 
 A minimal C utility that sits between `zfs send` and `mbuffer`:
 
@@ -323,5 +323,5 @@ Cascaded output uses a tree-drawing prefix:
 | `send_snapshot` (pipeline builder) | `zfs-transfer.lib.sh` | 240–379 |
 | `find_best_donor` (donor discovery) | `zfs-transfer.lib.sh` | 35–86 |
 | `divergence_report` (split-brain analysis) | `zfs-transfer.lib.sh` | 88–113 |
-| `iomon.c` (pipe monitor) | `iomon.c` | 1–82 |
+| `zpipe.c` (pipe monitor) | `zpipe.c` | 1–82 |
 | Assembly / build | `Makefile` | 1–50 |

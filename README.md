@@ -41,7 +41,7 @@ become master.
 - **Status dashboard** — `--status` shows chain health, pool capacity, IO stats,
   snapshot ages vs heartbeat thresholds, and retention percentages.
 - **Self-contained binary** — `make` assembles libraries, the orchestrator, and the
-  `iomon` C binary into a single `build/zep` script.
+  `zpipe` C binary into a single `build/zep` script.
 
 ## Dependencies
 
@@ -64,7 +64,7 @@ sudo make install         # installs to /usr/local/bin
 
 Build artifacts are in `build/`:
 - `zep` — assembled standalone script
-- `iomon` — compiled C pipe monitor
+- `zpipe` — compiled C pipe monitor
 - `alertcon` — debug SMTP server (development only)
 
 ## Quick Start
@@ -267,13 +267,13 @@ Labels encode their interval in the name: `min5`=5m, `hour2`=2h, `day1`=1d.
 | `zfs-alerts.lib.sh` | SMTP alerting with per-dataset rate-limiting. |
 | `zfs-status.lib.sh` | `--status` dashboard — chain health, pool stats, snapshot freshness. |
 | `zfs-stats.lib.sh` | `--stats` wire protocol for remote status calls. |
-| `iomon.c` | C pipe monitor for byte-progress tracking in send/recv pipelines. |
-| `Makefile` | Assembles libraries into `build/zep` and compiles `iomon`. |
+| `zpipe.c` | C pipe monitor for byte-progress tracking in send/recv pipelines. |
+| `Makefile` | Assembles libraries into `build/zep` and compiles `zpipe`. |
 
 ## Development
 
 ```bash
-make                    # build/zep + build/iomon
+make                    # build/zep + build/zpipe
 bash tests/zep_replication_tests.sh      # run test suite
 bash tests/zep_replication_tests.sh 1    # run specific test
 bash tests/zep_replication_tests.sh --list  # list all tests
