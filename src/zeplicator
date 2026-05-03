@@ -1278,7 +1278,6 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
         # When a node goes offline, its entry stays frozen, and rotation
         # on sink/middle nodes uses it to preserve common-ground snapshots.
         if [[ "$IS_MASTER" == true && "$CASCADED" == false && "$DRY_RUN" != true && -n "$LATEST_SNAP" ]]; then
-            local _ls_guid
             _ls_guid=$(zfs get -H -o value guid "$local_ds@$LATEST_SNAP" 2>/dev/null)
             if [[ -n "$_ls_guid" && "$_ls_guid" != "-" ]]; then
                 zfs set "zep:node:${hop_node}:last_snapshot=$_ls_guid" "$local_ds"
@@ -1324,7 +1323,6 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
                 CASCADE_VERIFIED=true
                 # Record last_snapshot for all cascaded downstream nodes
                 if [[ "$IS_MASTER" == true && "$CASCADED" == false && "$DRY_RUN" != true && -n "$LATEST_SNAP" ]]; then
-                    local _cs_guid
                     _cs_guid=$(zfs get -H -o value guid "$local_ds@$LATEST_SNAP" 2>/dev/null)
                     if [[ -n "$_cs_guid" && "$_cs_guid" != "-" ]]; then
                         for (( _ci=hop_idx; _ci<${#NODES_REMAINING[@]}; _ci++ )); do

@@ -203,11 +203,33 @@ _verify_guid_on_sink() {
     local node
     [[ "$sink_ds" =~ zep-node-([0-9]+)/ ]] && node="${BASH_REMATCH[1]}"
     local found
-    found=$(_ssh_node "${node:-3}" "zfs list -t snap -H -o guid ${sink_ds} 2>/dev/null | grep -c '^${expected_guid}\$'" || true)
-    if [[ "$found" -ge 1 ]]; then
+    found=$(_ssh_node "${node:-3}" "zfs list -t snap -H -o guid ${sink_ds} 2>/dev/null | grep -q '^${expected_guid}\$' && echo 1 || echo 0" || true)
+    if [[ "$found" == "1" ]]; then
         echo -e "  ${GREEN}PASS${RESET} $desc (GUID $expected_guid on $sink_ds)"; ((PASS++))
     else
         echo -ne "  ${RED}FAIL${RESET} $desc (GUID $expected_guid not on $sink_ds)"; _fail_log; ((FAIL++))
+    fi
+}
+
+_latest_master_guid() {
+    zfs list -t snap -H -o name,guid -S creation -r "$DS" 2>/dev/null | grep "@zep_" | head -1 | awk '{print $NF}'
+}
+
+_assert_snap_on_node() {
+    local node="$1"
+    local guid="$2"
+    local ds_n="zep-node-${node}/test-${node}"
+    local found
+    if [[ "$node" -eq 1 ]]; then
+        found=$(zfs list -t snap -H -o guid "$ds_n" 2>/dev/null | grep -c "^${guid}$" || true)
+    else
+        found=$(_ssh_node "$node" "zfs list -t snap -H -o guid ${ds_n} 2>/dev/null | grep -c '^${guid}\$'" || true)
+    fi
+    found=$(echo "$found" | tr -d '[:space:]')
+    if [[ "$found" -ge 1 ]]; then
+        echo -e "  ${GREEN}PASS${RESET} node${node} has GUID $guid"; ((PASS++))
+    else
+        echo -ne "  ${RED}FAIL${RESET} node${node} missing GUID $guid"; _fail_log; ((FAIL++))
     fi
 }
 
@@ -230,6 +252,17 @@ _pre_test_cleanup() {
 }
 
 ALERTCON="${SCRIPT_DIR}/../build/alertcon"
+
+_ensure_alertcon() {
+    local port="${SMTP_PORT:-1025}"
+    if curl -s --connect-timeout 2 "smtp://127.0.0.1:$port" > /dev/null 2>&1; then
+        return 0
+    fi
+    echo -e "  ${YELLOW}[setup]${RESET} Launching alertcon daemon on port $port..."
+    "$ALERTCON" --clear 2>/dev/null || true
+    nohup "$ALERTCON" "$port" --show-mail-only > /dev/null 2>&1 &
+    sleep 1
+}
 
 _alert_count() {
     "$ALERTCON" --count 2>/dev/null || echo 0
@@ -406,30 +439,29 @@ else
 fi
 echo -e "  ${GREEN}OK${RESET}"
 
+_ensure_alertcon
+
 # ══════════════════════════════════════════════════════════
 # TEST FUNCTIONS
 # ══════════════════════════════════════════════════════════
 
 test_initial() {
+    local _before_guid
+    _before_guid=$(_latest_master_guid)
     out=$(run_zep "$DS" --alias node1 "$LABEL" --init); rc=$?
     assert_exit "exit 0"   "0" "$rc"
     assert_out  "cascade"  "$out" "VERIFICATION SUCCESS"
     assert_out  "shipped"  "$out" "Marking sent snapshot"
-    for i in 1 2 3; do
-        local ds_n="zep-node-$i/test-$i"
-        local cnt
-        if [[ "$i" -eq 1 ]]; then
-            cnt=$(zfs list -t snap -H -o name -r "$ds_n" 2>/dev/null | grep -c "$LABEL" || true)
-        else
-            cnt=$(_ssh_node "$i" "zfs list -t snap -H -o name -r ${ds_n} 2>/dev/null | grep -c ${LABEL}" || true)
-        fi
-        assert_ge "node$i snaps" "$cnt" 1
-    done
-    local latest_snap guid
-    latest_snap=$(zfs list -t snap -H -o name -S creation "$DS" 2>/dev/null | grep "@zep_" | head -1)
-    if [[ -n "$latest_snap" ]]; then
-        guid=$(_guid_of_snap "$DS" "${latest_snap#*@}")
-        _verify_guid_on_sink "init GUID on node3" "$guid" "zep-node-3/test-3"
+    local _sent_guid
+    _sent_guid=$(_latest_master_guid)
+    if [[ -n "$_sent_guid" && "$_sent_guid" != "$_before_guid" ]]; then
+        for i in 1 2 3; do
+            _assert_snap_on_node "$i" "$_sent_guid"
+        done
+    else
+        echo -e "  ${RED}FAIL${RESET} no new snapshot GUID on master"; _fail_log; ((FAIL++))
+        echo -e "  ${RED}FAIL${RESET} node2 missing init GUID (no master GUID)"; _fail_log; ((FAIL++))
+        echo -e "  ${RED}FAIL${RESET} node3 missing init GUID (no master GUID)"; _fail_log; ((FAIL++))
     fi
     local alerts; alerts=$(_check_alerts)
     _assert_alert "initial replication" "$alerts" "initial replication successful"
@@ -577,17 +609,19 @@ test_resume_failed() {
     fi
 
     # Disable throttling, run clean — should complete with --init for node3
+    local _before_guid
+    _before_guid=$(_latest_master_guid)
     teardown_resume_mode
     out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
     assert_exit "clean run after failure" "0" "$rc"
 
-    # Sink must have at least the new snapshot
-    rem=$(_ssh_node 3 "zfs list -t snap -H -o name zep-node-3/test-3 2>/dev/null | grep -c 'zep_${LABEL}'" 2>/dev/null || true)
-    rem=$(echo "$rem" | tr -d '[:space:]')
-    if [[ -n "$rem" && "$rem" -ge 1 ]]; then
-        echo -e "  ${GREEN}PASS${RESET} sink snapshots: $rem >= 1"; ((PASS++))
+    # Sink must have the latest master snapshot
+    local _sent_guid
+    _sent_guid=$(_latest_master_guid)
+    if [[ -n "$_sent_guid" && "$_sent_guid" != "$_before_guid" ]]; then
+        _assert_snap_on_node 3 "$_sent_guid"
     else
-        echo -ne "  ${RED}FAIL${RESET} sink snapshots: '$rem' < 1"; _fail_log; ((FAIL++))
+        echo -ne "  ${RED}FAIL${RESET} no new snapshot on master after clean run"; _fail_log; ((FAIL++))
     fi
 }
 
@@ -600,15 +634,22 @@ test_resilience_offline() {
     # Isolate node2 (middle in chain: node1→node2→node3, master skips to node3)
     isolate_node 2
 
+    local _before_guid
+    _before_guid=$(_latest_master_guid)
     for cycle in 1 2 3; do
         out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
         assert_exit "cycle $cycle exit 3" "3" "$rc"
         assert_out  "skip node2" "$out" "Replication to node2 failed"
     done
 
-    # Verify node3 still receives snapshots even though node2 is down
-    snap_cnt=$(_ssh_node 3 "zfs list -t snap -H -o name -r zep-node-3/test-3 2>/dev/null | grep -c ${LABEL}" || true)
-    assert_ge "node3 got snaps while node2 offline" "$snap_cnt" 4
+    # Verify node3 received the latest master snapshot despite node2 offline
+    local _sent_guid
+    _sent_guid=$(_latest_master_guid)
+    if [[ -n "$_sent_guid" && "$_sent_guid" != "$_before_guid" ]]; then
+        _assert_snap_on_node 3 "$_sent_guid"
+    else
+        echo -ne "  ${RED}FAIL${RESET} no new snapshot on master after resilience cycles"; _fail_log; ((FAIL++))
+    fi
 }
 
 test_resilience_recovery() {
