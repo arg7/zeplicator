@@ -1098,35 +1098,6 @@ if [[ -n "$TARGET_NODE" ]]; then
     fi
 fi
 
-# --- HEARTBEAT MONITORING LOGIC ---
-if [[ "$IS_MASTER" == false ]]; then
-    # 1. Check for heartbeat property
-    HB_PROP="zep:alert:heartbeat:${label}"
-    HB_THRESHOLD_RAW=$(get_zfs_prop "$HB_PROP" "$local_ds")
-    
-    if [[ "$HB_THRESHOLD_RAW" != "-" ]]; then
-        # 2. Parse threshold to seconds
-        HB_THRESHOLD_SEC=$(parse_time_to_seconds "$HB_THRESHOLD_RAW")
-        
-        # 3. Find latest snapshot for label
-        LATEST_SNAP_NAME=$(zfs list -t snapshot -o name -H -S creation -r "$local_ds" | grep "@${REPL_SNAP_PREFIX}${label}-" | head -n 1)
-        
-        if [[ -n "$LATEST_SNAP_NAME" ]]; then
-            # 4. Calculate age in seconds
-            SNAP_TIME=$(zfs get -H -o value creation "$LATEST_SNAP_NAME")
-            SNAP_EPOCH=$(date -d "$SNAP_TIME" +%s)
-            NOW_EPOCH=$(date +%s)
-            AGE_SEC=$(( NOW_EPOCH - SNAP_EPOCH ))
-            
-            # 5. If age exceeds threshold, alert
-            if [[ $AGE_SEC -gt $HB_THRESHOLD_SEC ]]; then
-                send_smtp_alert "critical" --task "heartbeat" --status "lost" "CRITICAL: Upstream chain silent for label '${label}' on '${local_ds}'. Latest snapshot '${LATEST_SNAP_NAME}' is $((AGE_SEC/60)) minutes old (threshold: ${HB_THRESHOLD_RAW})."
-            fi
-        fi
-    fi
-fi
-# --- END HEARTBEAT MONITORING ---
-
 if [[ "$IS_MASTER" == false && "$CASCADED" == false && "$PROMOTE" == false && -z "$TARGET_NODE" && "$IS_DONOR" == false ]]; then
     if [[ "$CRON_MODE" == true ]]; then
         echo "${CHAIN_PREFIX}  🔄 Node $ME is not Master. Running rotation only..."
@@ -1189,15 +1160,26 @@ if [[ "$IS_MASTER" == true && "$CASCADED" == false && "$PROMOTE" == false && -z 
         _label_interval=$(parse_label_to_seconds "$label")
         _last_snap=$(zfs list -t snap -H -o name -S creation -r "$local_ds" 2>/dev/null | grep "@${REPL_SNAP_PREFIX}${label}-" | head -1)
         if [[ -n "$_last_snap" ]]; then
-            _last_snap_ts=$(zfs get -H -o value creation "$_last_snap" 2>/dev/null)
-            _last_epoch=$(date -d "$_last_snap_ts" +%s 2>/dev/null || echo 0)
-            _now_epoch=$(date +%s)
-            _elapsed=$((_now_epoch - _last_epoch))
-            if [[ $_elapsed -lt $_label_interval ]]; then
-                echo "${CHAIN_PREFIX}  ⏭️  Label $label: last snapshot ${_elapsed}s ago (interval: ${_label_interval}s). Skipping."
-                continue
+                _last_snap_ts=$(zfs get -H -o value creation "$_last_snap" 2>/dev/null)
+                _last_epoch=$(date -d "$_last_snap_ts" +%s 2>/dev/null || echo 0)
+                _now_epoch=$(date +%s)
+                _elapsed=$((_now_epoch - _last_epoch))
+
+                # Heartbeat check: alert if snapshot is older than configured threshold
+                _hb_raw=$(get_zfs_prop "zep:alert:heartbeat:${label}" "$local_ds")
+                if [[ "$_hb_raw" != "-" ]]; then
+                    _hb_sec=$(parse_time_to_seconds "$_hb_raw")
+                    if [[ $_elapsed -gt $_hb_sec ]]; then
+                        zbud_msg "  ⚠️  Heartbeat missed for label '${label}': latest snapshot is $((_elapsed/60)) min old (threshold: ${_hb_raw})"
+                        send_smtp_alert "warning" --task "heartbeat" --status "missing" "WARNING: Snapshot stall for label '${label}' on '${local_ds}'. Latest snapshot is $((_elapsed/60)) minutes old (threshold: ${_hb_raw})."
+                    fi
+                fi
+
+                if [[ $_elapsed -lt $_label_interval ]]; then
+                    echo "${CHAIN_PREFIX}  ⏭️  Label $label: last snapshot ${_elapsed}s ago (interval: ${_label_interval}s). Skipping."
+                    continue
+                fi
             fi
-        fi
     fi
 
     timestamp=$(date -u +%Y-%m-%d-%H%M)
