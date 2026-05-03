@@ -10,7 +10,7 @@ LABEL="min1"
 HOUR_LABEL="hour1"
 
 # ── sanity: apply default config to all nodes ─────────────
-"$ZEP_BIN" -bw "$DS" --alias node1 --config --import "$CONF_FILE" </dev/null > /dev/null 2>&1 || true
+"$ZEP_BIN" -bw --fs "$DS" --alias node1 --config --import "$CONF_FILE" </dev/null > /dev/null 2>&1 || true
 
 PASS=0
 FAIL=0
@@ -256,7 +256,7 @@ _pre_test_cleanup() {
     for i in 1 2 3; do
         zfs set "zep:node:node${i}:fqdn=zep-node-${i}.local" "$DS" 2>/dev/null || true
     done
-    "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=fail chain=node1,node2,node3 zep:zfs:recv_opt=- zep:debug:send_maxbytes=- zep:debug:throttle=- zep:debug:send_timeout=0 </dev/null > /dev/null 2>&1
+    "$ZEP_BIN" -bw --fs "$DS" --alias node1 --config policy=fail chain=node1,node2,node3 zep:zfs:recv_opt=- zep:debug:send_maxbytes=- zep:debug:throttle=- zep:debug:send_timeout=0 </dev/null > /dev/null 2>&1
 }
 
 ALERTCON="${SCRIPT_DIR}/../build/alertcon"
@@ -313,16 +313,16 @@ _check_alerts() {
 
 setup_resume_mode() {
     zfs set zep:debug:send_maxbytes=1M "$DS"
-    "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=fail --all </dev/null > /dev/null 2>&1
-    "$ZEP_BIN" -bw "$DS" --alias node1 --config zep:zfs:recv_opt="-F -s" --all </dev/null > /dev/null 2>&1
+    "$ZEP_BIN" -bw --fs "$DS" --alias node1 --config policy=fail --all </dev/null > /dev/null 2>&1
+    "$ZEP_BIN" -bw --fs "$DS" --alias node1 --config zep:zfs:recv_opt="-F -s" --all </dev/null > /dev/null 2>&1
 }
 teardown_resume_mode() {
     zfs inherit zep:debug:send_maxbytes "$DS" 2>/dev/null || zfs set zep:debug:send_maxbytes=- "$DS"
     zfs inherit zep:debug:throttle "$DS" 2>/dev/null || zfs set zep:debug:throttle=- "$DS"
     zfs inherit zep:debug:send_timeout "$DS" 2>/dev/null || zfs set zep:debug:send_timeout=0 "$DS"
-    "$ZEP_BIN" -bw "$DS" --alias node1 --config zep:debug:send_maxbytes=- --all </dev/null > /dev/null 2>&1
-    "$ZEP_BIN" -bw "$DS" --alias node1 --config zep:debug:throttle=- --all </dev/null > /dev/null 2>&1
-    "$ZEP_BIN" -bw "$DS" --alias node1 --config zep:debug:send_timeout=0 --all </dev/null > /dev/null 2>&1
+    "$ZEP_BIN" -bw --fs "$DS" --alias node1 --config zep:debug:send_maxbytes=- --all </dev/null > /dev/null 2>&1
+    "$ZEP_BIN" -bw --fs "$DS" --alias node1 --config zep:debug:throttle=- --all </dev/null > /dev/null 2>&1
+    "$ZEP_BIN" -bw --fs "$DS" --alias node1 --config zep:debug:send_timeout=0 --all </dev/null > /dev/null 2>&1
 }
 
 isolate_node() {
@@ -345,7 +345,7 @@ _get_chain() {
 _promote() {
     local node="$1"
     local rc
-    "$ZEP_BIN" -bw --alias "node${node}" "zep-node-${node}/test-${node}" --promote --auto -y </dev/null > /dev/null 2>&1
+    "$ZEP_BIN" -bw --fs "zep-node-${node}/test-${node}" --alias "node${node}" --promote --auto -y </dev/null > /dev/null 2>&1
     rc=$?
     return $rc
 }
@@ -417,7 +417,7 @@ _check_flag() {
 _set_chain() {
     local chain="$1"
     for n in 1 2 3; do
-        "$ZEP_BIN" -bw --alias "node${n}" "zep-node-${n}/test-${n}" --config "chain=${chain}" </dev/null > /dev/null 2>&1
+        "$ZEP_BIN" -bw --fs "zep-node-${n}/test-${n}" --alias "node${n}" --config "chain=${chain}" </dev/null > /dev/null 2>&1
     done
 }
 
@@ -426,7 +426,7 @@ _set_chain() {
 echo -e "${CYAN}=== Zeplicator Replication Test Suite ===${RESET}\n"
 
 chain_ok=false
-if "$ZEP_BIN" -bw "zep-node-1/test-1" --status --alias node1 </dev/null > /dev/null 2>&1; then
+if "$ZEP_BIN" -bw --fs "zep-node-1/test-1" --status --alias node1 </dev/null > /dev/null 2>&1; then
     current_chain=$(_get_chain 1)
     if [[ "$current_chain" == "node1,node2,node3" ]]; then
         chain_ok=true
@@ -456,7 +456,7 @@ _ensure_alertcon
 test_initial() {
     local _before_guid
     _before_guid=$(_latest_master_guid)
-    out=$(run_zep "$DS" --alias node1 --init); rc=$?
+    out=$(run_zep --fs "$DS" --alias node1 --init); rc=$?
     assert_exit "exit 0"   "0" "$rc"
     assert_out  "cascade"  "$out" "VERIFICATION SUCCESS"
     assert_out  "shipped"  "$out" "Marking sent snapshot"
@@ -476,7 +476,7 @@ test_initial() {
 }
 
 test_incremental() {
-    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
+    run_zep --fs "$DS" --alias node1 --label "$LABEL" --init > /dev/null
     _ensure_mounted "zep-node-1/test-1" || return 1
     echo "increment" >> /zep-node-1/test-1/inc.dat
     sync
@@ -486,14 +486,14 @@ test_incremental() {
     latest_snap=$(zfs list -t snap -H -o name -S creation "$DS" 2>/dev/null | grep "@zep_" | head -1)
     guid=$(_guid_of_snap "$DS" "${latest_snap#*@}")
 
-    out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+    out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL"); rc=$?
     assert_exit "exit 0"   "0" "$rc"
     assert_out  "cascade"  "$out" "VERIFICATION SUCCESS"
     _verify_guid_on_sink "inc GUID on node3" "$guid" "zep-node-3/test-3"
 }
 
 test_divergence() {
-    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
+    run_zep --fs "$DS" --alias node1 --label "$LABEL" --init > /dev/null
     local ds3="zep-node-3/test-3"
 
     # Scenario 1: GUID mismatch — same name, different GUID on destination
@@ -502,13 +502,13 @@ test_divergence() {
     _ssh_node 3 "zfs destroy ${dup_snap}" 2>/dev/null
     _ssh_node 3 "zfs snapshot ${ds3}@tmp_guid && zfs rename ${ds3}@tmp_guid ${ds3}@${snap_short}"
 
-    out=$(run_zep "$DS" --alias node1 "$LABEL" --init); rc=$?
+    out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL" --init); rc=$?
     assert_exit "guid mismatch !0"  "!0" "$rc"
     assert_out  "no common ground"   "$out" "no common ground"
 
     # Clean up: destroy node3 dataset, let re-init recreate it
     _ssh_node 3 "zfs destroy -r ${ds3}" 2>/dev/null || true
-    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
+    run_zep --fs "$DS" --alias node1 --label "$LABEL" --init > /dev/null
 
     # Scenario 2: data divergence — write to destination
     _ensure_mounted "$ds3" || return 1
@@ -516,7 +516,7 @@ test_divergence() {
     sync; sleep 1
     zfs unmount ${ds3} 2>/dev/null; zfs set canmount=noauto ${ds3} 2>/dev/null; true
 
-    out=$(run_zep "$DS" --alias node1 "$LABEL" --init); rc=$?
+    out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL" --init); rc=$?
     assert_exit "data diverge !0"  "!0" "$rc"
     assert_out  "split-brain"      "$out" "Split-Brain detected"
     local alerts; alerts=$(_check_alerts)
@@ -524,20 +524,20 @@ test_divergence() {
 }
 
 test_divergence_override() {
-    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
+    run_zep --fs "$DS" --alias node1 --label "$LABEL" --init > /dev/null
     local ds3="zep-node-3/test-3"
     _ensure_mounted "$ds3" || return 1
     echo diverged >> /${ds3}/div.dat && sync && sleep 1
     zfs unmount ${ds3} 2>/dev/null; zfs set canmount=noauto ${ds3} 2>/dev/null; true
 
     zfs set zep:zfs:recv_opt=-F "$DS"
-    out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+    out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL"); rc=$?
     zfs inherit zep:zfs:recv_opt "$DS" 2>/dev/null || zfs set zep:zfs:recv_opt=- "$DS"
     assert_exit "exit 0"  "0" "$rc"
 }
 
 test_resume() {
-    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
+    run_zep --fs "$DS" --alias node1 --label "$LABEL" --init > /dev/null
 
     setup_resume_mode
 
@@ -547,7 +547,7 @@ test_resume() {
     sync; sleep 1
 
     # Run — expect interruption at 1MB
-    out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+    out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL"); rc=$?
     assert_exit "interrupted" "!0" "$rc"
     assert_out  "max-bytes msg" "$out" "iomon: max-bytes"
 
@@ -556,7 +556,7 @@ test_resume() {
     completed=false
     for attempt in $(seq 1 30); do
         clean_tmp
-        out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+        out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL"); rc=$?
         if [[ $rc -eq 0 ]]; then
             completed=true
             break
@@ -572,7 +572,7 @@ test_resume() {
 }
 
 test_resume_failed() {
-    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
+    run_zep --fs "$DS" --alias node1 --label "$LABEL" --init > /dev/null
 
     setup_resume_mode
 
@@ -585,7 +585,7 @@ test_resume_failed() {
     done
 
     # Run — will be interrupted, token saved on node2
-    out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+    out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL"); rc=$?
     assert_exit "interrupted" "!0" "$rc"
     assert_out  "max-bytes msg" "$out" "iomon: max-bytes"
 
@@ -603,7 +603,7 @@ test_resume_failed() {
     done
 
     # Re-run — should detect ERR_RESUME_FAILED, clear token
-    out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+    out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL"); rc=$?
     assert_exit "resume failed" "!0" "$rc"
     assert_out  "token invalidated" "$out" "Resume token invalidated"
     assert_out  "token destroyed" "$out" "Destroyed stale resume token"
@@ -620,7 +620,7 @@ test_resume_failed() {
     local _before_guid
     _before_guid=$(_latest_master_guid)
     teardown_resume_mode
-    out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+    out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL"); rc=$?
     assert_exit "clean run after failure" "0" "$rc"
 
     # Sink must have the latest master snapshot
@@ -634,10 +634,10 @@ test_resume_failed() {
 }
 
 test_resilience_offline() {
-    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
+    run_zep --fs "$DS" --alias node1 --label "$LABEL" --init > /dev/null
 
     # Set policy=resilience on master
-    "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=resilience </dev/null > /dev/null
+    "$ZEP_BIN" -bw --fs "$DS" --alias node1 --config policy=resilience </dev/null > /dev/null
 
     # Isolate node2 (middle in chain: node1→node2→node3, master skips to node3)
     isolate_node 2
@@ -645,7 +645,7 @@ test_resilience_offline() {
     local _before_guid
     _before_guid=$(_latest_master_guid)
     for cycle in 1 2 3; do
-        out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+        out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL"); rc=$?
         assert_exit "cycle $cycle exit 3" "3" "$rc"
         assert_out  "skip node2" "$out" "Replication to node2 failed"
     done
@@ -661,36 +661,36 @@ test_resilience_offline() {
 }
 
 test_resilience_recovery() {
-    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
-    "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=resilience </dev/null > /dev/null
+    run_zep --fs "$DS" --alias node1 --label "$LABEL" --init > /dev/null
+    "$ZEP_BIN" -bw --fs "$DS" --alias node1 --config policy=resilience </dev/null > /dev/null
     isolate_node 2
     for cycle in 1 2 3; do
-        run_zep "$DS" --alias node1 "$LABEL" > /dev/null
+        run_zep --fs "$DS" --alias node1 --label "$LABEL" > /dev/null
     done
     restore_node 2
     sleep 1
 
-    out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+    out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL"); rc=$?
     assert_exit "restored exit 0" "0" "$rc"
     assert_out  "cascade ok" "$out" "VERIFICATION SUCCESS"
 
     # Reset policy to fail for subsequent test runs
-    "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=fail </dev/null > /dev/null
+    "$ZEP_BIN" -bw --fs "$DS" --alias node1 --config policy=fail </dev/null > /dev/null
 }
 
 test_splitbrain_resilience() {
-    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
-    "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=fail --all </dev/null > /dev/null
+    run_zep --fs "$DS" --alias node1 --label "$LABEL" --init > /dev/null
+    "$ZEP_BIN" -bw --fs "$DS" --alias node1 --config policy=fail --all </dev/null > /dev/null
 
     _write_error 2
-    out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+    out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL"); rc=$?
     assert_exit "split-brain node2 exit 2" "2" "$rc"
     assert_out  "split-brain msg" "$out" "Split-Brain detected"
     _check_flag 2 "true"
 
     # Resilience: skip diverged node
-    "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=resilience --all </dev/null > /dev/null
-    out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+    "$ZEP_BIN" -bw --fs "$DS" --alias node1 --config policy=resilience --all </dev/null > /dev/null
+    out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL"); rc=$?
     assert_exit "resilience skip exit 3" "3" "$rc"
     assert_out  "resilience skip" "$out" "Skipping due to policy=resilience"
     _check_flag 2 "true"
@@ -700,47 +700,47 @@ test_splitbrain_resilience() {
 }
 
 test_splitbrain_rollback() {
-    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
-    "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=fail </dev/null > /dev/null
+    run_zep --fs "$DS" --alias node1 --label "$LABEL" --init > /dev/null
+    "$ZEP_BIN" -bw --fs "$DS" --alias node1 --config policy=fail </dev/null > /dev/null
     _write_error 2
-    out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+    out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL"); rc=$?
     assert_exit "split-brain node2 exit 2" "2" "$rc"
     _check_flag 2 "true"
 
     _rollback_node 2
     _check_flag 2 "true"  # flag persists until successful replication
 
-    out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+    out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL"); rc=$?
     assert_exit "rollback recovery exit 0" "0" "$rc"
     assert_out  "cascade ok" "$out" "VERIFICATION SUCCESS"
     _check_flag 2 "false"
 }
 
 test_divergence_report() {
-    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
+    run_zep --fs "$DS" --alias node1 --label "$LABEL" --init > /dev/null
     _write_error 2
 
     local snap
     snap=$(_ssh_node 2 "zfs list -t snap -o name -H -S creation zep-node-2/test-2 2>/dev/null | grep '@zep_' | head -1")
 
-    out=$(run_zep "zep-node-2/test-2" --alias node2 --divergence-report "${snap#*@}"); rc=$?
+    out=$(run_zep --fs "zep-node-2/test-2" --alias node2 --divergence-report "${snap#*@}"); rc=$?
     assert_exit "divergence-report exit 2" "2" "$rc"
     assert_out  "report has details" "$out" "+	/zep-node-2/test-2/error"
     assert_out  "detects error" "$out" "error"
 
     _rollback_node 2
 
-    out=$(run_zep "zep-node-2/test-2" --alias node2 --divergence-report "${snap#*@}"); rc=$?
+    out=$(run_zep --fs "zep-node-2/test-2" --alias node2 --divergence-report "${snap#*@}"); rc=$?
     assert_exit "divergence-report clean exit 0" "0" "$rc"
 
     # Cleanup: reset node3 for subsequent tests
     destroy_node3
-    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
+    run_zep --fs "$DS" --alias node1 --label "$LABEL" --init > /dev/null
 }
 
 test_promote() {
     destroy_node3
-    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
+    run_zep --fs "$DS" --alias node1 --label "$LABEL" --init > /dev/null
 
     _promote 3; rc=$?
     assert_exit "promote node3" "0" "$rc"
@@ -748,17 +748,17 @@ test_promote() {
     chain=$(_get_chain 1)
     assert_out "chain node3,node1,node2" "$chain" "node3,node1,node2"
 
-    out=$(run_zep "zep-node-3/test-3" --alias node3 "$LABEL"); rc=$?
+    out=$(run_zep --fs "zep-node-3/test-3" --alias node3 --label "$LABEL"); rc=$?
     assert_exit "node3 master exit 0" "0" "$rc"
     assert_out  "node3 shipped" "$out" "Marking sent snapshot"
 
-    out=$(run_zep "zep-node-1/test-1" --alias node1 "$LABEL"); rc=$?
+    out=$(run_zep --fs "zep-node-1/test-1" --alias node1 --label "$LABEL"); rc=$?
     assert_exit "node1 non-master exit !0" "!0" "$rc"
 }
 
 test_promote_back() {
     destroy_node3
-    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
+    run_zep --fs "$DS" --alias node1 --label "$LABEL" --init > /dev/null
     _promote 3; rc=$?
     assert_exit "promote node3" "0" "$rc"
     chain=$(_get_chain 1)
@@ -768,29 +768,29 @@ test_promote_back() {
     assert_exit "promote node1" "0" "$rc"
 
     # Explicitly reset chain after promotion
-    "$ZEP_BIN" -bw "$DS" --alias node1 --config "chain=node1,node2,node3" --all </dev/null > /dev/null
+    "$ZEP_BIN" -bw --fs "$DS" --alias node1 --config "chain=node1,node2,node3" --all </dev/null > /dev/null
 
     chain=$(_get_chain 1)
     assert_out "chain restored" "$chain" "node1,node2,node3"
 
-    out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+    out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL"); rc=$?
     assert_exit "node1 master again exit 0" "0" "$rc"
     assert_out  "node1 shipped" "$out" "Marking sent snapshot"
 
-    out=$(run_zep "zep-node-3/test-3" --alias node3 "$LABEL"); rc=$?
+    out=$(run_zep --fs "zep-node-3/test-3" --alias node3 --label "$LABEL"); rc=$?
     assert_exit "node3 non-master exit !0" "!0" "$rc"
 }
 
 test_non_master() {
-    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
-    out=$(run_zep "zep-node-2/test-2" --alias node2 "$LABEL"); rc=$?
+    run_zep --fs "$DS" --alias node1 --label "$LABEL" --init > /dev/null
+    out=$(run_zep --fs "zep-node-2/test-2" --alias node2 --label "$LABEL"); rc=$?
     assert_exit "exit !0"  "!0" "$rc"
     assert_out  "not master" "$out" "not Master"
 }
 
 test_status() {
-    destroy_node3; run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
-    out=$(run_zep "$DS" --alias node1 --status); rc=$?
+    destroy_node3; run_zep --fs "$DS" --alias node1 --label "$LABEL" --init > /dev/null
+    out=$(run_zep --fs "$DS" --alias node1 --status); rc=$?
     assert_exit "exit 0"   "0" "$rc"
     assert_out  "node1"    "$out" "node1"
     assert_out  "node2"    "$out" "node2"
@@ -803,8 +803,8 @@ test_rotate() {
     crontab -l 2>/dev/null | sed 's/^\(.*--rotate.*\)/#\1/' | crontab -
     trap '[[ -n "$cron_saved" ]] && echo "$cron_saved" | crontab -' RETURN
 
-    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
-    for i in 1 2 3; do clean_tmp; run_zep "$DS" --alias node1 "$LABEL" > /dev/null; done
+    run_zep --fs "$DS" --alias node1 --label "$LABEL" --init > /dev/null
+    for i in 1 2 3; do clean_tmp; run_zep --fs "$DS" --alias node1 --label "$LABEL" > /dev/null; done
 
     # Create 3 manual (unshipped) snapshots
     for i in 1 2 3; do
@@ -814,7 +814,7 @@ test_rotate() {
     # Set retention=2 for this label on master
     zfs set "zep:role:master:keep:${LABEL}=2" "$DS"
 
-    run_zep "$DS" --alias node1 --rotate > /dev/null
+    run_zep --fs "$DS" --alias node1 --rotate > /dev/null
 
     # Shipped snapshots should be purged; 3 manual unshipped should remain
     local manual=$(zfs list -t snap -H -o name -r "$DS" 2>/dev/null | grep -c "zep_${LABEL}_manual" || true)
@@ -830,7 +830,7 @@ test_lost_common_donor() {
     # as common ground. When node2 returns, replication succeeds directly (no donor
     # needed because common ground was never lost).
 
-    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
+    run_zep --fs "$DS" --alias node1 --label "$LABEL" --init > /dev/null
 
     # Disable cron rotation on all nodes (interferes with controlled rotation)
     local cron_saved=$(crontab -l 2>/dev/null)
@@ -842,7 +842,7 @@ test_lost_common_donor() {
     zfs set "zep:role:sink:keep:${LABEL}=2"   "zep-node-3/test-3" 2>/dev/null || true
 
     # Enable resilience so master skips offline node2 and goes to node3
-    "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=resilience </dev/null > /dev/null
+    "$ZEP_BIN" -bw --fs "$DS" --alias node1 --config policy=resilience </dev/null > /dev/null
 
     # Isolate node2
     isolate_node 2
@@ -851,9 +851,9 @@ test_lost_common_donor() {
     # Also rotate on node3 (sink) to verify it preserves node2's last_snapshot.
     # Node2 never receives them — its last_snapshot freezes and must survive rotation.
     for cycle in $(seq 1 8); do
-        run_zep "$DS" --alias node1 "$LABEL" > /dev/null
-        run_zep "$DS" --alias node1 --rotate > /dev/null
-        run_zep "zep-node-3/test-3" --alias node3 --rotate > /dev/null
+        run_zep --fs "$DS" --alias node1 --label "$LABEL" > /dev/null
+        run_zep --fs "$DS" --alias node1 --rotate > /dev/null
+        run_zep --fs "zep-node-3/test-3" --alias node3 --rotate > /dev/null
     done
 
     # Verify node3 still preserves node2's last common snapshot (init GUID)
@@ -875,7 +875,7 @@ test_lost_common_donor() {
 
     # Master replicates to node2: common ground is preserved, so direct replication
     # succeeds without donor search. Cascade propagates to node3 (sink).
-    out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+    out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL"); rc=$?
     assert_exit "recovery exit 0"    "0"  "$rc"
     assert_out  "replication ok"     "$out" "Replication to zep-user-2@"
     assert_out  "cascade ok"         "$out" "VERIFICATION SUCCESS"
@@ -889,7 +889,7 @@ test_lost_common_donor() {
     # Reset retention and policy for subsequent tests
     zfs set "zep:role:master:keep:${LABEL}=10" "$DS"
     zfs inherit "zep:role:sink:keep:${LABEL}" "zep-node-3/test-3" 2>/dev/null || true
-    "$ZEP_BIN" -bw "$DS" --alias node1 --config policy=fail </dev/null > /dev/null
+    "$ZEP_BIN" -bw --fs "$DS" --alias node1 --config policy=fail </dev/null > /dev/null
 }
 
 test_foreign_dataset() {
@@ -899,7 +899,7 @@ test_foreign_dataset() {
     _ssh_node 3 "zfs set canmount=noauto zep-node-3/test-3"
     _ssh_node 3 "zfs unmount zep-node-3/test-3" 2>/dev/null || true
     zfs allow zep-user-3 create,mount,receive,destroy,userprop,diff zep-node-3 2>/dev/null || true
-    out=$(run_zep "$DS" --alias node1 "$LABEL" --init); rc=$?
+    out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL" --init); rc=$?
     assert_exit "exit !0"  "!0" "$rc"
     assert_out  "FOREIGN"  "$out" "FOREIGN DATASET"
     # cleanup: reset node3 for subsequent tests
@@ -907,15 +907,15 @@ test_foreign_dataset() {
     _ssh_node 3 "zfs create -o canmount=noauto zep-node-3/test-3"
     _ssh_node 3 "zfs unmount zep-node-3/test-3" 2>/dev/null || true
     zfs allow zep-user-3 create,destroy,send,receive,snapshot,hold,release,userprop zep-node-3/test-3 2>/dev/null || true
-    run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
+    run_zep --fs "$DS" --alias node1 --label "$LABEL" --init > /dev/null
 }
 
 test_missing_perms() {
     destroy_node3
     # re-init so node2+node3 are healthy
-    out=$(run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null)
+    out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL" --init > /dev/null)
     zfs unallow zep-user-3 zep-node-3 2>/dev/null || true
-    out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+    out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL"); rc=$?
     assert_exit "exit !0"  "!0" "$rc"
     assert_out  "perms msg" "$out" "Missing pool permissions"
     # restore
@@ -924,13 +924,13 @@ test_missing_perms() {
 }
 
 test_missing_pool() {
-    destroy_node3; run_zep "$DS" --alias node1 "$LABEL" --init > /dev/null
+    destroy_node3; run_zep --fs "$DS" --alias node1 --label "$LABEL" --init > /dev/null
     _ssh_node 3 "zfs unmount zep-node-3/test-3" 2>/dev/null || true
     zpool export zep-node-3 2>/dev/null || true
-    out=$(run_zep "$DS" --alias node1 "$LABEL"); rc=$?
+    out=$(run_zep --fs "$DS" --alias node1 --label "$LABEL"); rc=$?
     assert_exit "exit !0"  "!0" "$rc"
     assert_out  "pool msg" "$out" "not found"
-    out=$(run_zep "$DS" --alias node1 --status); rc=$?
+    out=$(run_zep --fs "$DS" --alias node1 --status); rc=$?
     assert_exit "status exit !0" "!0" "$rc"
     assert_out  "status missing" "$out" "MISSING"
     zpool import -f -d /tmp/zep-ramdisk zep-node-3 2>/dev/null || true

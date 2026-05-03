@@ -35,7 +35,7 @@ find_best_donor() {
         if timeout "$((ssh_t + 5))" ssh -o ConnectTimeout="$ssh_t" "$donor_target" "zfs list -t snapshot -H -r $ds_on_donor >/dev/null 2>&1"; then
             log_message "  Performing capability dry-run on $donor_alias..."
             local props_data="${sync_props_data:-$(get_repl_props_encoded "$ds_raw")}"
-            if timeout "$((proc_t + 5))" ssh -o ConnectTimeout="$ssh_t" "$donor_target" "zep $ds_raw $label 0 --alias $donor_alias --target $target_node --donor --dry-run --sync-props '$props_data' >/dev/null 2>&1"; then
+            if timeout "$((proc_t + 5))" ssh -o ConnectTimeout="$ssh_t" "$donor_target" "zep --fs $ds_raw --label $label --keep 0 --alias $donor_alias --target $target_node --donor --dry-run --sync-props '$props_data' >/dev/null 2>&1"; then
                 log_message "  ✅ $donor_alias selected as best donor."
                 echo "$donor_alias"
                 return 0

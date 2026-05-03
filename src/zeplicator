@@ -39,14 +39,18 @@ usage() {
 zeplicator - Modular ZFS Replication Manager
 
 Usage:
-  $(basename "$0") <filesystem> [label] [keep_fallback] [flags]
+  $(basename "$0") --fs <filesystem> [--label <name>] [--keep <n>] [flags]
+  $(basename "$0")                   # auto-discover master datasets
 
-Positional Arguments:
-  <filesystem>         The ZFS filesystem to replicate (e.g., tank/data).
-                    Can be a remote alias if 'zep:node:<alias>:fs' is set.
-  [label]           Snapshot label to filter/create. If omitted, all configured
-                    labels (from zep:role:*:keep:*) are replicated in sequence.
-  [keep_fallback]   Default number of snapshots to keep if not configured (default: 10).
+Required:
+  --fs <dataset>      The ZFS filesystem to replicate (e.g., tank/data).
+                      If omitted, auto-discovers all local datasets where
+                      this node is the master (first in zep:chain).
+
+Optional:
+  --label <name>      Snapshot label to replicate (repeatable for multiple).
+                      If omitted, all labels with zep:role:*:keep:* are used.
+  --keep <n>          Fallback retention count if no role/node policy exists (default: 10).
 
 Primary Flags:
   --dry-run         Simulate the entire replication chain without making changes.
@@ -145,7 +149,9 @@ while [[ $# -gt 0 ]]; do
         --target) TARGET_NODE="$2"; shift 2 ;;
         --donor) IS_DONOR=true; shift ;;
         --now) NOW_MODE=true; shift ;;
-        --label) LABEL_FILTER+=("$2"); shift 2 ;;
+        --label) LABEL_FILTER+=("$2"); label="${LABEL_FILTER[0]}"; LABEL_EXPLICIT=true; shift 2 ;;
+        --fs) raw_filesystem="$2"; shift 2 ;;
+        --keep) keep_fallback="$2"; shift 2 ;;
         --dry-run) DRY_RUN=true; shift ;;
         --snap-list) shift 2 ;;  # deprecated, kept for backward compat
         --status) STATUS_MODE=true; shift ;;
@@ -172,10 +178,7 @@ done
 # Re-initialize colors now that flags like -bw and --force-color might be set
 init_colors
 
-# Assign positional arguments
-if [[ ${#positional_args[@]} -gt 0 ]]; then raw_filesystem="${positional_args[0]}"; fi
-if [[ ${#positional_args[@]} -gt 1 ]]; then label="${positional_args[1]}"; LABEL_EXPLICIT=true; fi
-if [[ ${#positional_args[@]} -gt 2 ]]; then keep_fallback="${positional_args[2]}"; fi
+# Set log command tag for per-mode log file names
 
 # Set log command tag for per-mode log file names
 if [[ "$STATS_MODE" == true ]]; then REPL_LOG_CMD="stats"
@@ -840,7 +843,7 @@ if [[ "$PROMOTE" == true ]]; then
                 echo -n "    - $_n ($_n_fqdn)... "
                 _ssh_rc=0
                 ssh -o ConnectTimeout="$REPL_SSH_TIMEOUT" "${_n_user}@${_n_fqdn}" \
-                    "zep $raw_filesystem $label $keep_fallback --alias $_n --apply-props $_props_encoded" >/dev/null 2>&1 || _ssh_rc=$?
+                    "zep --fs $raw_filesystem --label $label --keep $keep_fallback --alias $_n --apply-props $_props_encoded" >/dev/null 2>&1 || _ssh_rc=$?
                 if [[ $_ssh_rc -eq 0 ]]; then
                     echo "✅"
                 else
@@ -888,7 +891,7 @@ if [[ "$PROMOTE" == true ]]; then
                 echo -n "    - $_n ($_n_fqdn)... "
                 _ssh_rc=0
                 ssh -o ConnectTimeout="$REPL_SSH_TIMEOUT" "${_n_user}@${_n_fqdn}" \
-                    "zep $raw_filesystem $label $keep_fallback --alias $_n --apply-props $_props_encoded" >/dev/null 2>&1 || _ssh_rc=$?
+                    "zep --fs $raw_filesystem --label $label --keep $keep_fallback --alias $_n --apply-props $_props_encoded" >/dev/null 2>&1 || _ssh_rc=$?
                 if [[ $_ssh_rc -eq 0 ]]; then
                     echo "✅"
                 else
@@ -1327,7 +1330,7 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
 
             DONOR_PROPS_ARG="--sync-props ${sync_props_data:-$(get_repl_props_encoded "$local_ds")}"
 
-            if ssh "$donor_target" "zep $raw_filesystem $label $keep_fallback $donor_opts $DONOR_PROPS_ARG"; then
+            if ssh "$donor_target" "zep --fs $raw_filesystem --label $label --keep $keep_fallback $donor_opts $DONOR_PROPS_ARG"; then
                 echo -e "${CHAIN_PREFIX}  ${C_GREEN}✅${C_RESET} Delegated replication from $DONOR_NODE to $hop_node successful."
 
                 # RETRY local replication now that common ground should exist
@@ -1389,7 +1392,7 @@ while [[ $hop_idx -lt ${#NODES_REMAINING[@]} ]]; do
             PROPS_ARG="--sync-props $props_to_pass"
 
             # Cascade downstream through SSH — output flows through directly
-            ssh -o ConnectTimeout="$REPL_SSH_TIMEOUT" "$HOP_TARGET" "export CHAIN_PREFIX=\"${CHAIN_PREFIX}\"; zep $remote_ds $label $keep_fallback $casc_opts $PROPS_ARG --cascaded"
+            ssh -o ConnectTimeout="$REPL_SSH_TIMEOUT" "$HOP_TARGET" "export CHAIN_PREFIX=\"${CHAIN_PREFIX}\"; zep --fs $remote_ds --label $label --keep $keep_fallback $casc_opts $PROPS_ARG --cascaded"
             SSH_STATUS=$?
 
             if [[ $SSH_STATUS -eq 2 ]]; then
