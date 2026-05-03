@@ -102,9 +102,6 @@ Test scripts live in `tests/` and are run directly — they are **not** part of 
 | `tests/zep_replication_tests.sh` | Main 20-test suite (see table below) |
 | `tests/tzepcon` | Interactive 4-pane tmux session for live test observation |
 | `tests/sim.sh` | Convenience wrappers in the tmux simulator pane: `start`, `stop`, `config`, `q` |
-| `tests/zep_test_loop.sh` | Manual infinite sync loop (syncs every 3s), pauses on unexpected exits |
-| `tests/test_splitbrain.sh` | Standalone 8-phase split-brain detection / resilience / rollback / force-override validation |
-| `tests/test_promote.sh` | Standalone chain promotion test: promotes through all nodes |
 | `tests/README.txt` | User-facing cheatsheet displayed in the simulator pane |
 
 ### Simulated Cluster Architecture
