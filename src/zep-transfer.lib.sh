@@ -352,7 +352,7 @@ zfsbud_core() {
             src_data+="${sn##*@}=${sg}|"
         done
         src_data="${src_data%|}"
-        div_output=$($remote_shell "zep --divergence-report $common_snap_name $target_ds \"$src_data\"" 2>&1)
+        div_output=$($remote_shell "zep --fs $target_ds --divergence-report $common_snap_name \"$src_data\"" 2>&1)
         div_rc=$?
 
         if [[ $div_rc -eq 2 ]]; then
@@ -495,7 +495,7 @@ zfsbud_core() {
                 src_data+="${sn##*@}=${sg}|"
             done
             src_data="${src_data%|}"
-            diff_output=$($remote_shell zep "$remote_ds" --divergence-report "${last_snapshot_common:-}" "$src_data" 2>&1)
+            diff_output=$($remote_shell "zep --fs $remote_ds --divergence-report ${last_snapshot_common:-} \"$src_data\"" 2>&1)
             [[ -n "$diff_output" ]] && echo "$diff_output" | while IFS= read -r line; do zbud_msg "  |  $line"; done
 
             zbud_msg ""
