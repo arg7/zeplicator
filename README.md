@@ -156,7 +156,6 @@ zep                                              # auto-discover all master data
 | Flag | Description |
 | :--- | :--- |
 | `--rotate` | Run retention purge for all labels locally (standalone, no replication). |
-| `--mark-only` | Only purge shipped snapshots, no replication. |
 | `--target <node>` | Point-to-point transfer to a specific node (bypasses chain). |
 | `--donor` | Run as a donor peer for downstream healing (internal). |
 | `--apply-props <b>` | Apply encoded properties and exit (internal). |

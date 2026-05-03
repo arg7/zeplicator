@@ -565,7 +565,7 @@ check_stuck_job() {
     
     # Determine if we should wait or fail fast
     local wait_for_lock=false
-    if [[ "$CASCADED" == true || "$PROMOTE" == true || "$SUSPEND" == true || "$RESUME" == true || "$MARK_ONLY" == true || -t 0 ]]; then
+    if [[ "$CASCADED" == true || "$PROMOTE" == true || "$SUSPEND" == true || "$RESUME" == true || -t 0 ]]; then
         wait_for_lock=true
     fi
 

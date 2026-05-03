@@ -251,7 +251,6 @@ Lock file: `/tmp/<prefix>_<alias>-<ds-safe>-<label>.lock`
 
 **Stuck job detection**: If a lock exceeds `zep:proc:timeout` (default 60s), checks `.cnt` file progress. If progress is flat over 2s, alerts and aborts. If still progressing, touches lock to reset age.
 
-**Wait mode**: For cascaded operations, promotion, suspend/resume, mark-only, or interactive TTY — polls every 10s waiting for the lock to clear.
 
 ---
 

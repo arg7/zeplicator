@@ -69,7 +69,6 @@ Primary Flags:
   --alias <name>    Manually specify the local node alias (overrides hostname detection).
 
 Advanced Flags:
-  --mark-only       Only perform rotation/cleanup of already shipped snapshots.
   --rotate          Run snapshot retention rotation for all labels locally (for root cron).
   --align-chain-data  Force chain data alignment during promotion (skips rollback).
   --snap <name>     Specify a literal snapshot name to use for promotion/rollback.
@@ -101,7 +100,6 @@ EOF
     exit 0
 }
 
-MARK_ONLY=false
 initial_send=false
 PROMOTE=false
 APPLY_PROPS=""
@@ -135,7 +133,6 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --help|-h) usage ;;
         --alias) CLI_ALIAS="$2"; shift 2 ;;
-        --mark-only) MARK_ONLY=true; shift ;;
         --init) initial_send=true; shift ;;
         -bw) export ZEP_BW="true"; shift ;;
         --force-color) export ZEP_FORCE_COLOR="true"; shift ;;
@@ -1130,7 +1127,7 @@ if [[ "$IS_MASTER" == false ]]; then
 fi
 # --- END HEARTBEAT MONITORING ---
 
-if [[ "$IS_MASTER" == false && "$CASCADED" == false && "$PROMOTE" == false && "$MARK_ONLY" == false && -z "$TARGET_NODE" && "$IS_DONOR" == false ]]; then
+if [[ "$IS_MASTER" == false && "$CASCADED" == false && "$PROMOTE" == false && -z "$TARGET_NODE" && "$IS_DONOR" == false ]]; then
     if [[ "$CRON_MODE" == true ]]; then
         echo "${CHAIN_PREFIX}  🔄 Node $ME is not Master. Running rotation only..."
         run_cron_rotate
@@ -1146,14 +1143,6 @@ if [[ "$IS_MASTER" == true && "$CASCADED" == false && "$PROMOTE" == false && -z 
         echo "${CHAIN_PREFIX}  🛑 Replication is SUSPENDED (zep:suspend=true). Skipping run."
         exit 0
     fi
-fi
-
-
-if [[ "$MARK_ONLY" == true ]]; then
-    if [[ "$IS_MASTER" == true ]]; then
-        purge_shipped_snapshots "$local_ds" "$label" "$RESOLVED_KEEP"
-    fi
-    exit 0
 fi
 
 # ── Label discovery (when no label explicitly provided) ──
